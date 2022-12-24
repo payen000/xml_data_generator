@@ -1,0 +1,17 @@
+*/__pycache__/
+*.pyc
+.bandit
+.editorconfig
+.eslintrc.json
+.isort.cfg
+.flake8
+.flake8-optional
+.pre-commit-config-autofix.yaml
+.pre-commit-config-optional.yaml
+.pre-commit-config.yaml
+.prettierrc.yml
+.pylintrc
+.pylintrc-optional
+doc8.ini
+pyproject.toml
+xml_exported_data/

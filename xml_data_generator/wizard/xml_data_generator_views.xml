@@ -1,0 +1,40 @@
+<odoo>
+    <record id="xml_data_generator_view_form" model="ir.ui.view">
+        <field name="name">xml.data.generator.view.form</field>
+        <field name="model">xml.data.generator</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <p class="oe_grey">
+                        This tool will show this record's non-computed fields as if it were a record defined by
+                        XML. This is a harmless procedure with no consequence to the records themselves. Depending
+                        on the 'Records to Export' field, the field values of related records will also be shown.
+                    </p>
+                    <group>
+                        <field name="model_name" />
+                        <field name="res_id" />
+                        <field name="mode" />
+                        <field name="recursive_depth" />
+                        <field name="avoid_duplicates" />
+                        <field name="ignore_access" />
+                        <field name="show_data" invisible="1" />
+                        <field
+                            name="fetched_data"
+                            attrs="{'invisible': ['|', ('show_data', '=', False), ('fetched_data', '=', False)]}"
+                        />
+                    </group>
+                    <footer>
+                        <button
+                            string="Export to XML"
+                            name="action_export_to_xml"
+                            class="btn-info"
+                            type="object"
+                            data-hotkey="v"
+                        />
+                        <button string="Cancel" class="btn-danger" special="cancel" data-hotkey="z" />
+                    </footer>
+                </sheet>
+            </form>
+        </field>
+    </record>
+</odoo>
