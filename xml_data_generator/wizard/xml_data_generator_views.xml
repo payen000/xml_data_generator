@@ -1,0 +1,46 @@
+<odoo>
+    <record id="xml_data_generator_view_form" model="ir.ui.view">
+        <field name="name">xml.data.generator.view.form</field>
+        <field name="model">xml.data.generator</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <p class="oe_grey">
+                        This tool will show this record's non-computed fields as if it were a record defined by
+                        XML. This is a harmless procedure with no consequence to the records themselves. Depending
+                        on the 'Records to Export' field, the field values of related records will also be shown.
+                    </p>
+                    <group>
+                        <field name="model_name" />
+                        <field name="res_id" />
+                        <field name="mode" />
+                        <field name="recursive_depth" />
+                        <!-- autofocus is necessary here for boolean fields to re-render the footer appropriately
+                        after filling the wizard record with data (this is a bad hack but this way we avoid having
+                        to patch JS further, which would make this harder to migrate and is not worth it IMHO).
+                        Another workaround would be to convert the boolean fields to selection fields, which work
+                        fine with current autofocus-related JS, but I believe that having to select 'Yes' or 'No'
+                        instead of clicking for 'True' and 'False' feels kinda goofy. -->
+                        <field name="avoid_duplicates" autofocus="" />
+                        <field name="ignore_access" autofocus="" />
+                        <field name="show_data" autofocus="" invisible="1" />
+                        <field
+                            name="fetched_data"
+                            attrs="{'invisible': ['|', ('show_data', '=', False), ('fetched_data', '=', False)]}"
+                        />
+                    </group>
+                    <footer>
+                        <button
+                            string="Export to XML"
+                            name="action_export_to_xml"
+                            class="btn-info"
+                            type="object"
+                            data-hotkey="v"
+                        />
+                        <button string="Cancel" class="btn-danger" special="cancel" data-hotkey="z" />
+                    </footer>
+                </sheet>
+            </form>
+        </field>
+    </record>
+</odoo>
