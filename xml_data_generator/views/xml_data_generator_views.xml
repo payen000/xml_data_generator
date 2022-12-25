@@ -9,11 +9,14 @@
                         <field name="model_name" />
                         <field name="res_id" />
                         <field name="mode" />
+                        <field name="recursive_depth" />
+                        <field name="ignore_access" />
+                        <field name="show_data_as_error" />
                     </group>
                     <footer>
                         <button
-                            string='Import to XML'
-                            name='action_import_to_xml'
+                            string='Export to XML'
+                            name='action_export_to_xml'
                             class='btn-info'
                             type='object'
                             data-hotkey='v'

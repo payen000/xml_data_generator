@@ -14,3 +14,4 @@
 .pylintrc-optional
 doc8.ini
 pyproject.toml
+xml_exported_data/
