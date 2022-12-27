@@ -10,6 +10,7 @@ UNWANTED_FIELDS = {
     "write_uid",
     "write_date",
     "__last_update",
+    "message_ids",
 }
 
 
@@ -65,38 +66,6 @@ class XmlDataGenerator(models.TransientModel):
             return {}
         return {field_name: {"value": current_value, "ttype": ttype}}
 
-    def _prepare_data_to_export(self, records, data):
-        recursive_depth = self._context.get("recursive_depth", 0)
-        if recursive_depth > self.recursive_depth:
-            return data
-        model_name = records._name
-        field_objects = records._fields
-        field_names = [
-            field
-            for field in field_objects
-            if field_objects[field].compute is None and not field.startswith("image_") and field not in UNWANTED_FIELDS
-        ]
-        field_records = self.env["ir.model.fields"].search(
-            [
-                ("model", "=", model_name),
-                ("name", "in", list(field_names)),
-            ]
-        )
-        related_records = []
-        for record in records:
-            field_data = {"xml_id": record.get_external_id()[record.id], "model_name": model_name}
-            for field in field_names:
-                ttype = field_records.filtered(lambda f: f.name == field).ttype
-                field_values = self._xml_data_generator_get_field_data(record, field, field_objects[field], ttype)
-                field_data.update(field_values)
-                if ttype in ["one2many", "many2one", "many2many"] and field_values:
-                    related_records.append(field_values[field]["value"])
-            data.append(field_data)
-        # Handle related records
-        for recordset in related_records:
-            self.with_context(recursive_depth=recursive_depth+1)._prepare_data_to_export(recordset, data)
-        return data
-
     def _prepare_xml_id(self, record_xid, table_name, id_):
         if (
             len(record_xid) > 0
@@ -109,11 +78,52 @@ class XmlDataGenerator(models.TransientModel):
             return "%s_demo_%s" % (table_name, id_)
         return "%s_%s" % (table_name, id_)
 
-    def _prepare_xml_row_to_append(self, field_name, dataset):
+    def _prepare_data_to_export(self, records, data, dependency_tree, model_data, recursive_depth):
+        if recursive_depth > self.recursive_depth:
+            return data
+        model_name = records._name
+        xml_model = model_name.replace(".", "_")
+        field_objects = records._fields
+        field_names = [
+            field
+            for field in field_objects
+            if field_objects[field].compute is None and not field.startswith("image_") and field not in UNWANTED_FIELDS
+        ]
+        field_records = self.env["ir.model.fields"].search(
+            [
+                ("model", "=", model_name),
+                ("name", "in", list(field_names)),
+            ]
+        )
+        for record in records:
+            xml_id = self._prepare_xml_id(record.get_external_id()[record.id], xml_model, record.id)
+            record_data = {"model_name": model_name, "xml_model": xml_model}
+            for field in field_names:
+                ttype = field_records.filtered(lambda f: f.name == field).ttype
+                field_values = self._xml_data_generator_get_field_data(record, field, field_objects[field], ttype)
+                record_data.update(field_values)
+                if ttype not in ["one2many", "many2one", "many2many"] or not field_values:
+                    continue
+                related_recordset = field_values[field]["value"]
+                for r in related_recordset:
+                    child_xml_id = self._prepare_xml_id(r.get_external_id()[r.id], xml_model, r.id)
+                    child_model = r._name
+                    # Do not add one2many records to dependencies (only many2one and many2many)
+                    if ttype != "one2many" and xml_id not in dependency_tree.get(child_xml_id, {}):
+                        dependency_tree.setdefault(xml_id, {}).update({child_xml_id: child_model})
+                    self._prepare_data_to_export(related_recordset, data, dependency_tree, model_data, recursive_depth + 1)
+            data[xml_id] = record_data
+            model_data.setdefault(model_name, {}).update({xml_id: dependency_tree.get(xml_id, {})})
+        return data, dependency_tree, model_data
+
+    def _prepare_xml_row_to_append(self, field_name, dataset, dependency_tree):
         field_value = dataset[field_name]["value"]
         field_ttype = dataset[field_name]["ttype"]
         row_dict = {"tab": "    ", "field": field_name}
-        if field_ttype not in ["one2many", "many2many", "many2one"]:
+        # Do not add one2many rows (they will be handled in the "many" side of the relation)
+        if field_ttype == "one2many":
+            return None
+        if field_ttype not in ["many2many", "many2one"]:
             row_dict["field_value"] = field_value
             if field_ttype == "boolean":
                 return '%(tab)s%(tab)s<field name="%(field)s" eval="%(field_value)s" />' % row_dict
@@ -122,10 +132,14 @@ class XmlDataGenerator(models.TransientModel):
         xml_ids = []
         for id_ in field_value.ids:
             record_xid = field_value.get_external_id()[id_]
+            if record_xid not in dependency_tree:
+                continue
             if field_ttype == "many2one":
                 row_dict["ref_value"] = self._prepare_xml_id(record_xid, table_name, id_)
                 return '%(tab)s%(tab)s<field name="%(field)s" ref="%(ref_value)s" />' % row_dict
             xml_ids.append("ref('%s')" % self._prepare_xml_id(record_xid, table_name, id_))
+        if not xml_ids:
+            return None
         row_dict["eval_value"] = "[Command.set([%s])]" % ", ".join(xml_ids)
         row = '%(tab)s%(tab)s<field name="%(field)s" eval="%(eval_value)s" />' % row_dict
         # Pre-commit friendly (but hardcoded so it bad)
@@ -142,23 +156,20 @@ class XmlDataGenerator(models.TransientModel):
             )
         return row
 
-    def prepare_xml_data_to_export(self, data):
+    def prepare_xml_data_to_export(self, data, dependency_tree):
         xml_records_code = []
-        for dataset in data:
+        for xml_id, dataset in data.items():
             xml_code = []
             db_id = dataset.pop("id")["value"]
-            xml_id = dataset.pop("xml_id")
-            model_name = dataset.pop("model_name")
-            xml_model = model_name.replace(".", "_")
-            if len(xml_id) == 0 or "_export" in xml_id or "import_" in xml_id:
-                if self.mode == "demo":
-                    xml_id = "%s_demo_%s" % (xml_model, db_id)
-                else:
-                    xml_id = "%s_%s" % (xml_model, db_id)
+            model_name = dataset["model_name"]
+            xml_model = dataset.pop("xml_model")
             xml_code.append('    <record id="%s" model="%s">' % (xml_id, model_name))
             for field_name in dataset:
-                row2append = self._prepare_xml_row_to_append(field_name, dataset)
-                xml_code.append(row2append)
+                if field_name == "model_name":
+                    continue
+                row2append = self._prepare_xml_row_to_append(field_name, dataset, dependency_tree)
+                if row2append:
+                    xml_code.append(row2append)
             xml_code.append("    </record>")
             xml_records_code.append("\n".join(xml_code))
         return '<?xml version="1.0" ?>\n<odoo>\n%s\n</odoo>\n' % "\n\n".join(xml_records_code)
@@ -174,13 +185,84 @@ class XmlDataGenerator(models.TransientModel):
         with open(data_path, "w") as xml_file:
             xml_file.write(xml_data_string)
 
+    {
+        'res.partner': {
+            'base.res_partner_address_15': {
+                'base.res_partner_12': 'res.partner', 
+                'base.state_us_5': 'res.country.state', 
+                'base.us': 'res.country'
+            }, 
+            'base.res_partner_address_28': {
+                'base.res_partner_12': 'res.partner', 
+                'base.state_us_5': 'res.country.state', 
+                'base.us': 'res.country'
+            }, 
+            'base.res_partner_address_16': {
+                'base.res_partner_12': 'res.partner', 
+                'base.state_us_5': 'res.country.state', 
+                'base.us': 'res.country'
+            }, 
+            'base.res_partner_12': {
+                'base.res_partner_category_11': 'res.partner.category', 
+                'base.state_us_5': 'res.country.state', 
+                'base.us': 'res.country'
+            }}
+        , 
+        'res.partner.category': {
+            'base.res_partner_category_11': {
+
+            }
+        }, 
+        'res.country.state': {
+            'base.state_us_5': {
+                'base.us': 'res.country'
+            }
+        }, 
+        'res.country': {
+            'base.us': {
+                'base.USD': 'res.currency'
+            }
+        }
+    }
+
+    def _probe_model(self, xml_ids, model, model_data, ordered_model_data):
+        for xml_id in xml_ids:
+            dependencies = xml_ids[xml_id]
+            for dependency in dependencies:
+                ordered_model_data.setdefault(model, [])
+                if dependency not in ordered_model_data[model]:
+                    if dependency in xml_ids:
+                        ordered_model_data[model] = [dependency] + ordered_model_data[model]
+                    else:
+                        ordered_model_data[model].append(dependency)
+                elif dependency not in xml_ids:
+                    counter_model = dependencies[dependency]
+                    counter_xml_ids = model_data.get(counter_model)
+                    if not counter_xml_ids:
+                        return
+                    self._probe_model(counter_xml_ids, counter_model, model_data, ordered_model_data)
+
+    def _resolve_dependency_tree(self, model_dependencies):
+        model_data_keys = list(model_dependencies)
+        model_data_keys.reverse()
+        ordered_model_data = {}
+        for model in model_data_keys:
+            xml_ids = model_dependencies[model]
+            self._probe_model(xml_ids, model, model_dependencies, ordered_model_data)
+        return ordered_model_data
+
     def action_export_to_xml(self):
         self.ensure_one()
         records2export = self._get_records_to_export()
-        data2export = self._prepare_data_to_export(records2export, [])
-        # Reverse order of data to preserve xml dependencies
-        data2export.reverse()
-        xml_data_string = self.prepare_xml_data_to_export(data2export)
+        data2export, dependency_tree, model_data = self._prepare_data_to_export(records2export, {}, {}, {}, 0)
+        resolved_list = self._resolve_dependency_tree(model_data)
+        data2export2 = {}
+        for model in resolved_list:
+            for xml_id in resolved_list[model]:
+                if data2export.get(xml_id):
+                    data2export2[xml_id] = data2export[xml_id]
+        breakpoint()
+        xml_data_string = self.prepare_xml_data_to_export(data2export2, dependency_tree)
         if self.show_data_as_error:
             raise UserError(xml_data_string)
         self._create_xml_data(xml_data_string)
