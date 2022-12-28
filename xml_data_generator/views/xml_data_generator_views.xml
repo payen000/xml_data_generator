@@ -1,8 +1,8 @@
 <odoo>
-    <record id='xml_data_generator_view_form' model='ir.ui.view'>
-        <field name='name'>xml.data.generator.view.form</field>
-        <field name='model'>xml.data.generator</field>
-        <field name='arch' type='xml'>
+    <record id="xml_data_generator_view_form" model="ir.ui.view">
+        <field name="name">xml.data.generator.view.form</field>
+        <field name="model">xml.data.generator</field>
+        <field name="arch" type="xml">
             <form>
                 <sheet>
                     <group>
@@ -15,30 +15,30 @@
                     </group>
                     <footer>
                         <button
-                            string='Export to XML'
-                            name='action_export_to_xml'
-                            class='btn-info'
-                            type='object'
-                            data-hotkey='v'
+                            string="Export to XML"
+                            name="action_export_to_xml"
+                            class="btn-info"
+                            type="object"
+                            data-hotkey="v"
                         />
-                        <button string='Cancel' class='btn-danger' special='cancel' data-hotkey='z' />
+                        <button string="Cancel" class="btn-danger" special="cancel" data-hotkey="z" />
                     </footer>
                 </sheet>
             </form>
         </field>
     </record>
 
-    <record id='xml_data_generator_view_action' model='ir.actions.act_window'>
-        <field name='name'>Import to XML</field>
-        <field name='type'>ir.actions.act_window</field>
-        <field name='res_model'>xml.data.generator</field>
-        <field name='view_mode'>form</field>
-        <field name='view_id' ref='xml_data_generator_view_form' />
-        <field name='target'>new</field>
+    <record id="xml_data_generator_view_action" model="ir.actions.act_window">
+        <field name="name">Export to XML</field>
+        <field name="type">ir.actions.act_window</field>
+        <field name="res_model">xml.data.generator</field>
+        <field name="view_mode">form</field>
+        <field name="view_id" ref="xml_data_generator_view_form" />
+        <field name="target">new</field>
         <field name="binding_model_id" ref="base.model_res_partner" />
-        <field name='context'>{
-            'default_model_name': active_model,
-            'default_res_id': active_id,
+        <field name="context">{
+            "default_model_name": active_model,
+            "default_res_id": active_id,
         }</field>
     </record>
 </odoo>
