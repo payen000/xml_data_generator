@@ -109,7 +109,7 @@ class XmlDataGenerator(models.TransientModel):
             return record_xid
         if self.mode == "demo":
             return "%s_demo_%s" % (table_name, id_)
-        return "%s_%s" % (table_name, id_)
+        return "%s_auto_%s" % (table_name, id_)
 
     def _prepare_data_to_export(self, records, data, dependency_tree, dependency_data, recursive_depth):
         if recursive_depth > self.recursive_depth:
