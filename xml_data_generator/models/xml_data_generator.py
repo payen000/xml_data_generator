@@ -97,7 +97,7 @@ class XmlDataGenerator(models.TransientModel):
             }
         }
 
-    def _prepare_xml_id(self, record_xid, table_name, id_, recursive_depth, is_child_record=False):
+    def _prepare_external_id(self, record_xid, table_name, id_, recursive_depth, is_child_record=False):
         if (
             len(record_xid) > 0
             and "_export" not in record_xid
@@ -129,8 +129,10 @@ class XmlDataGenerator(models.TransientModel):
             ]
         )
         for record in records:
-            xml_id = self._prepare_xml_id(record.get_external_id()[record.id], xml_model, record.id, recursive_depth)
-            if not xml_id:
+            external_id = self._prepare_external_id(
+                record.get_external_id()[record.id], xml_model, record.id, recursive_depth
+            )
+            if not external_id:
                 continue
             record_data = {"model_name": model_name, "xml_model": xml_model}
             for field in field_names:
@@ -141,21 +143,21 @@ class XmlDataGenerator(models.TransientModel):
                 if ttype not in ["one2many", "many2one", "many2many"] or not field_values:
                     continue
                 related_recordset = field_values[field].pop("value")
-                child_xml_ids = []
+                child_external_ids = []
                 for related_record in related_recordset:
                     child_model = related_record._name
-                    child_xml_id = self._prepare_xml_id(
+                    child_external_id = self._prepare_external_id(
                         related_record.get_external_id()[related_record.id],
                         child_model.replace(".", "_"),
                         related_record.id,
                         recursive_depth,
                         is_child_record=True,
                     )
-                    child_xml_ids.append(child_xml_id)
+                    child_external_ids.append(child_external_id)
                     # Do not add one2many records to dependencies (only many2one and many2many)
                     if ttype != "one2many":
-                        if xml_id not in dependency_tree.get(child_xml_id, set()):
-                            dependency_tree.setdefault(xml_id, set()).add(child_xml_id)
+                        if external_id not in dependency_tree.get(child_external_id, set()):
+                            dependency_tree.setdefault(external_id, set()).add(child_external_id)
                         if model_name not in dependency_data["model_dependencies"].get(child_model, set()):
                             dependency_data["model_dependencies"].setdefault(child_model, set()).add(model_name)
                     self._prepare_data_to_export(
@@ -165,10 +167,10 @@ class XmlDataGenerator(models.TransientModel):
                         dependency_data,
                         recursive_depth + 1,
                     )
-                # Replace the records themselves by their xml_ids
-                field_values[field]["value"] = child_xml_ids
-            data.setdefault(model_name, {}).update({xml_id: record_data})
-            dependency_data["record_dependencies"].update({xml_id: dependency_tree.get(xml_id, {})})
+                # Replace the records themselves by their external_ids
+                field_values[field]["value"] = child_external_ids
+            data.setdefault(model_name, {}).update({external_id: record_data})
+            dependency_data["record_dependencies"].update({external_id: dependency_tree.get(external_id, {})})
         return data, dependency_data
 
     def _prepare_xml_row_to_append(self, field_name, field_value, field_ttype, field_related_model):
@@ -179,21 +181,21 @@ class XmlDataGenerator(models.TransientModel):
                 return '%(tab)s%(tab)s<field name="%(field)s" eval="%(field_value)s" />' % row_dict
             return '%(tab)s%(tab)s<field name="%(field)s">%(field_value)s</field>' % row_dict
         field_related_model.replace(".", "_")
-        xml_ids = []
+        external_ids = []
         for record_xid in field_value:
             if field_ttype == "many2one":
                 row_dict["ref_value"] = record_xid
                 return '%(tab)s%(tab)s<field name="%(field)s" ref="%(ref_value)s" />' % row_dict
-            xml_ids.append("ref('%s')" % record_xid)
-        if not xml_ids:
+            external_ids.append("ref('%s')" % record_xid)
+        if not external_ids:
             return None
-        row_dict["eval_value"] = "[Command.set([%s])]" % ", ".join(xml_ids)
+        row_dict["eval_value"] = "[Command.set([%s])]" % ", ".join(external_ids)
         row = '%(tab)s%(tab)s<field name="%(field)s" eval="%(eval_value)s" />' % row_dict
         # Pre-commit friendly (but hardcoded so it bad)
         if len(row) > 119:
-            row_dict["xml_ids"] = ",\n                ".join(xml_ids)
+            row_dict["external_ids"] = ",\n                ".join(external_ids)
             row_dict["eval_value"] = (
-                "[Command.set([\n%(tab)s%(tab)s%(tab)s%(tab)s%(xml_ids)s,\n%(tab)s%(tab)s%(tab)s])]" % row_dict
+                "[Command.set([\n%(tab)s%(tab)s%(tab)s%(tab)s%(external_ids)s,\n%(tab)s%(tab)s%(tab)s])]" % row_dict
             )
             # TODO: look for a better way to format these ugly strings
             row = (
@@ -207,12 +209,16 @@ class XmlDataGenerator(models.TransientModel):
         xml_records_code = []
         # This is to fix the order within a single file
         # TODO: improve this logic (perhaps sort the whole data outside in another method)
-        data = {xml_id: unsorted_data[xml_id] for xml_id in sorted_xml_dependencies if xml_id in unsorted_data}
-        for xml_id, dataset in data.items():
+        data = {
+            external_id: unsorted_data[external_id]
+            for external_id in sorted_xml_dependencies
+            if external_id in unsorted_data
+        }
+        for external_id, dataset in data.items():
             xml_code = []
             model_name = dataset["model_name"]
             dataset.pop("xml_model")
-            xml_code.append('    <record id="%s" model="%s">' % (xml_id, model_name))
+            xml_code.append('    <record id="%s" model="%s">' % (external_id, model_name))
             for field_name in dataset:
                 if field_name == "model_name":
                     continue
