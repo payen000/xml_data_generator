@@ -10,6 +10,7 @@
                         <field name="res_id" />
                         <field name="mode" />
                         <field name="recursive_depth" />
+                        <field name="avoid_duplicates" />
                         <field name="ignore_access" />
                         <field name="show_data_as_error" />
                     </group>

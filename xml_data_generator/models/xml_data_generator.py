@@ -3,6 +3,8 @@ from os.path import dirname, exists, join
 
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError
+from odoo.loglevels import ustr
+from odoo.tools import topological_sort
 
 UNWANTED_FIELDS = {
     "id",
@@ -36,7 +38,7 @@ class XmlDataGenerator(models.TransientModel):
         [("demo", "Export Anonymized Data"), ("real", "Export Real Data")],
         default="real",
         required=True,
-        help="Wether to anonimyze Char/Text fields or not.",
+        help="Wether to anonymize Char/Text fields or not.",
     )
     recursive_depth = fields.Integer(
         default=0,
@@ -50,6 +52,10 @@ class XmlDataGenerator(models.TransientModel):
     show_data_as_error = fields.Boolean(
         default=True,
         help="Show an error message with the data instead of exporting to a file.",
+    )
+    avoid_duplicates = fields.Boolean(
+        default=True,
+        help="Wether to avoid exporting data that already has an external ID by xml or not.",
     )
 
     def _get_records_to_export(self):
@@ -67,29 +73,39 @@ class XmlDataGenerator(models.TransientModel):
             if not self.ignore_access:
                 raise AccessError(e)
             return {}
-        # Anonimyze record text data
+        # Convert html Markup data to string
+        if ttype == "html":
+            current_value = ustr(current_value) if current_value else False
+            default_value = ustr(default_value) if default_value else False
+        # Anonymize record text data
         if self.mode == "demo" and ttype in TEXT_TTYPES and current_value:
             current_value = "Demo %s" % field_name
-            # If the target model has a method for anonimyzing the field, use it instead
+            # If the target model has a method for anonymizing the field, use it instead
             if hasattr(record, "_xml_data_generator_get_demo_%s" % field_name):
                 current_value = getattr(record, "_xml_data_generator_get_demo_%s" % field_name)()
         # Exclude non-boolean False fields and fields that have the same value as their defaults
         if (not ttype == "boolean" and not current_value) or default_value == current_value:
             return {}
-        if ttype == "html" and not isinstance(current_value, str):
-            current_value = current_value.unescape()
         if ttype in TEXT_TTYPES and current_value:
             for char in SPECIAL_CHARACTER_MAP:
                 current_value = current_value.replace(char, SPECIAL_CHARACTER_MAP[char])
-        return {field_name: {"value": current_value, "ttype": ttype}}
+        return {
+            field_name: {
+                "value": current_value,
+                "ttype": ttype,
+                "related_model": current_value._name if ttype in ["one2many", "many2one", "many2many"] else False,
+            }
+        }
 
-    def _prepare_xml_id(self, record_xid, table_name, id_):
+    def _prepare_xml_id(self, record_xid, table_name, id_, recursive_depth, is_child_record=False):
         if (
             len(record_xid) > 0
             and "_export" not in record_xid
             and "import_" not in record_xid
             and "base_import" not in record_xid
         ):
+            if self.avoid_duplicates and recursive_depth > 0 and not is_child_record:
+                return None
             return record_xid
         if self.mode == "demo":
             return "%s_demo_%s" % (table_name, id_)
@@ -113,53 +129,62 @@ class XmlDataGenerator(models.TransientModel):
             ]
         )
         for record in records:
-            xml_id = self._prepare_xml_id(record.get_external_id()[record.id], xml_model, record.id)
+            xml_id = self._prepare_xml_id(record.get_external_id()[record.id], xml_model, record.id, recursive_depth)
+            if not xml_id:
+                continue
             record_data = {"model_name": model_name, "xml_model": xml_model}
             for field in field_names:
                 ttype = field_records.filtered(lambda f: f.name == field).ttype
                 field_values = self._xml_data_generator_get_field_data(record, field, field_objects[field], ttype)
-                record_data.update(field_values)
+                if ttype != "one2many":
+                    record_data.update(field_values)
                 if ttype not in ["one2many", "many2one", "many2many"] or not field_values:
                     continue
-                related_recordset = field_values[field]["value"]
+                related_recordset = field_values[field].pop("value")
+                child_xml_ids = []
                 for related_record in related_recordset:
-                    child_xml_id = self._prepare_xml_id(
-                        related_record.get_external_id()[related_record.id], xml_model, related_record.id
-                    )
                     child_model = related_record._name
-                    # Do not add one2many records to dependencies (only many2one and many2many)
-                    if ttype != "one2many" and xml_id not in dependency_tree.get(child_xml_id, {}):
-                        dependency_data["model_dependencies"].setdefault(model_name, set()).add(child_model)
-                        dependency_tree.setdefault(xml_id, set()).add(child_xml_id)
-                    self._prepare_data_to_export(
-                        related_recordset, data, dependency_tree, dependency_data, recursive_depth + 1
+                    child_xml_id = self._prepare_xml_id(
+                        related_record.get_external_id()[related_record.id],
+                        child_model.replace(".", "_"),
+                        related_record.id,
+                        recursive_depth,
+                        is_child_record=True,
                     )
+                    child_xml_ids.append(child_xml_id)
+                    # Do not add one2many records to dependencies (only many2one and many2many)
+                    if ttype != "one2many":
+                        if xml_id not in dependency_tree.get(child_xml_id, set()):
+                            dependency_tree.setdefault(xml_id, set()).add(child_xml_id)
+                        if model_name not in dependency_data["model_dependencies"].get(child_model, set()):
+                            dependency_data["model_dependencies"].setdefault(child_model, set()).add(model_name)
+                    self._prepare_data_to_export(
+                        related_recordset,
+                        data,
+                        dependency_tree,
+                        dependency_data,
+                        recursive_depth + 1,
+                    )
+                # Replace the records themselves by their xml_ids
+                field_values[field]["value"] = child_xml_ids
             data.setdefault(model_name, {}).update({xml_id: record_data})
             dependency_data["record_dependencies"].update({xml_id: dependency_tree.get(xml_id, {})})
         return data, dependency_data
 
-    def _prepare_xml_row_to_append(self, field_name, dataset, dependency_tree):
-        field_value = dataset[field_name]["value"]
-        field_ttype = dataset[field_name]["ttype"]
+    def _prepare_xml_row_to_append(self, field_name, field_value, field_ttype, field_related_model):
         row_dict = {"tab": "    ", "field": field_name}
-        # Do not add one2many rows (they will be handled in the "many" side of the relation)
-        if field_ttype == "one2many":
-            return None
         if field_ttype not in ["many2many", "many2one"]:
             row_dict["field_value"] = field_value
             if field_ttype == "boolean":
                 return '%(tab)s%(tab)s<field name="%(field)s" eval="%(field_value)s" />' % row_dict
             return '%(tab)s%(tab)s<field name="%(field)s">%(field_value)s</field>' % row_dict
-        table_name = field_value._table
+        field_related_model.replace(".", "_")
         xml_ids = []
-        for id_ in field_value.ids:
-            record_xid = field_value.get_external_id()[id_]
-            if record_xid not in dependency_tree:
-                continue
+        for record_xid in field_value:
             if field_ttype == "many2one":
-                row_dict["ref_value"] = self._prepare_xml_id(record_xid, table_name, id_)
+                row_dict["ref_value"] = record_xid
                 return '%(tab)s%(tab)s<field name="%(field)s" ref="%(ref_value)s" />' % row_dict
-            xml_ids.append("ref('%s')" % self._prepare_xml_id(record_xid, table_name, id_))
+            xml_ids.append("ref('%s')" % record_xid)
         if not xml_ids:
             return None
         row_dict["eval_value"] = "[Command.set([%s])]" % ", ".join(xml_ids)
@@ -178,8 +203,11 @@ class XmlDataGenerator(models.TransientModel):
             )
         return row
 
-    def prepare_xml_data_to_export(self, data, dependency_tree):
+    def prepare_xml_data_to_export(self, unsorted_data, sorted_xml_dependencies, sorted_model_dependencies_dict):
         xml_records_code = []
+        # This is to fix the order within a single file
+        # TODO: improve this logic (perhaps sort the whole data outside in another method)
+        data = {xml_id: unsorted_data[xml_id] for xml_id in sorted_xml_dependencies if xml_id in unsorted_data}
         for xml_id, dataset in data.items():
             xml_code = []
             model_name = dataset["model_name"]
@@ -188,7 +216,20 @@ class XmlDataGenerator(models.TransientModel):
             for field_name in dataset:
                 if field_name == "model_name":
                     continue
-                row2append = self._prepare_xml_row_to_append(field_name, dataset, dependency_tree)
+                field_value = dataset[field_name]["value"]
+                field_ttype = dataset[field_name]["ttype"]
+                field_related_model = dataset[field_name]["related_model"]
+                # Do not add one2many rows (they will be handled in the "many" side of the relation)
+                # also do not add fields for models with "downstream" dependencies, only upwards
+                # to avoid defining a field relationship twice (which would result in a dependency error)
+                if (
+                    field_ttype == "one2many"
+                    or field_related_model
+                    and sorted_model_dependencies_dict.get(field_related_model, -1)
+                    < sorted_model_dependencies_dict.get(model_name, -1)
+                ):
+                    continue
+                row2append = self._prepare_xml_row_to_append(field_name, field_value, field_ttype, field_related_model)
                 if row2append:
                     xml_code.append(row2append)
             xml_code.append("    </record>")
@@ -209,21 +250,17 @@ class XmlDataGenerator(models.TransientModel):
             with open(data_path, "w") as xml_file:
                 xml_file.write(xml_data_string)
 
-    def _resolve_dependency_tree(self, data2rearrange):
-        xml_id_list = list(data2rearrange.keys())
-        xml_id_list.reverse()
-        rearranged_data = {}
-        for xml_id in xml_id_list:
-            rearranged_data[xml_id] = data2rearrange.pop(xml_id)
-        return rearranged_data
-
     def _show_xml_data(self, file_strings):
-        data2show = "\n".join([file_strings[model] for model in file_strings])
+        files_list = [file_strings[model] for model in file_strings]
+        files_list.reverse()
+        data2show = "\n".join(files_list)
         raise UserError(data2show)
 
     def action_export_to_xml(self):
         self.ensure_one()
         records2export = self._get_records_to_export()
+        if not records2export:
+            raise UserError(_("No records found to export."))
         data2export, dependency_data = self._prepare_data_to_export(
             records2export,
             {},
@@ -231,11 +268,24 @@ class XmlDataGenerator(models.TransientModel):
             {"record_dependencies": {}, "model_dependencies": {}},
             0,
         )
+        sorted_xml_dependencies = topological_sort(dependency_data["record_dependencies"])
+        sorted_model_dependencies = topological_sort(dependency_data["model_dependencies"])
+        # Topological sort leaves out elements without dependencies, so we must add them to the beginning of the list
+        # since the list of files are reverted at the end
+        sorted_model_dependencies = (
+            list(set(list(data2export.keys())) - set(sorted_model_dependencies)) + sorted_model_dependencies
+        )
+        sorted_model_dependencies_dict = {model: i for i, model in enumerate(sorted_model_dependencies)}
+
         file_strings = {}
-        # TODO: use model_dependencies to suggest a dependency order
-        for model in dependency_data["model_dependencies"]:
-            model_data = self._resolve_dependency_tree(data2export[model])
-            xml_data_string = self.prepare_xml_data_to_export(model_data, dependency_data["record_dependencies"])
+        for model in sorted_model_dependencies:
+            if model not in data2export:
+                continue
+            xml_data_string = self.prepare_xml_data_to_export(
+                data2export[model],
+                sorted_xml_dependencies,
+                sorted_model_dependencies_dict,
+            )
             file_strings.update({model: xml_data_string})
         if self.show_data_as_error:
             self._show_xml_data(file_strings)
@@ -243,6 +293,18 @@ class XmlDataGenerator(models.TransientModel):
 
     @api.onchange("recursive_depth")
     def _check_recursive_depth(self):
+        if self.recursive_depth > 3:
+            self.recursive_depth = 3
+            return {
+                "warning": {
+                    "title": _("Maximum recommended recursion level exceeded by far."),
+                    "message": _(
+                        "Exceeding 3 recursion levels is not recommended, as record relations "
+                        "can grow rapidly without warning and the export operation would certainly "
+                        "result in a stuck system. Going back to level 3."
+                    ),
+                }
+            }
         if self.recursive_depth > 2:
             return {
                 "warning": {
