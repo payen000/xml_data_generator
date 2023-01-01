@@ -1,17 +1,20 @@
 {
     "name": "xml_data_generator",
     "license": "GPL-3",
-    "summary": """
-        Short (1 phrase/line) summary of the module's purpose, used as
-        subtitle on modules listing or apps.openerp.com""",
+    "summary": """Module to export records as XML.""",
     "author": "Vauxoo",
     "website": "https://www.yourcompany.com",
     "category": "Uncategorized",
     "version": "16.0.0.0.1",
-    "depends": ["base"],
+    "depends": ["base", "web"],
     "data": [
         "security/ir.model.access.csv",
-        "views/xml_data_generator_views.xml",
+        "wizard/xml_data_generator_views.xml",
     ],
     "demo": [],
+    "assets": {
+        "web.assets_backend": [
+            "xml_data_generator/static/src/views/form_controller.js",
+        ],
+    },
 }

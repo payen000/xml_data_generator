@@ -6,8 +6,6 @@
             <form>
                 <sheet>
                     <group>
-                        <field name="model_name" />
-                        <field name="res_id" />
                         <field name="mode" />
                         <field name="recursive_depth" />
                         <field name="avoid_duplicates" />
@@ -27,19 +25,5 @@
                 </sheet>
             </form>
         </field>
-    </record>
-
-    <record id="xml_data_generator_view_action" model="ir.actions.act_window">
-        <field name="name">Export to XML</field>
-        <field name="type">ir.actions.act_window</field>
-        <field name="res_model">xml.data.generator</field>
-        <field name="view_mode">form</field>
-        <field name="view_id" ref="xml_data_generator_view_form" />
-        <field name="target">new</field>
-        <field name="binding_model_id" ref="base.model_res_partner" />
-        <field name="context">{
-            "default_model_name": active_model,
-            "default_res_id": active_id,
-        }</field>
     </record>
 </odoo>
