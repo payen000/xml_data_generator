@@ -65,7 +65,7 @@ class XmlDataGenerator(models.TransientModel):
         return records
 
     def _xml_data_generator_get_field_data(self, record, field_name, field_object, ttype):
-        # Check access, and if access is being ignored, return empty field
+        # Check access to fields, and if access is being ignored, return empty field
         try:
             current_value = record[field_name]
             default_value = field_object.default and field_object.default(record) or False
@@ -77,8 +77,13 @@ class XmlDataGenerator(models.TransientModel):
         if ttype == "html":
             current_value = ustr(current_value) if current_value else False
             default_value = ustr(default_value) if default_value else False
-        # Anonymize record text data
-        if self.mode == "demo" and ttype in TEXT_TTYPES and current_value:
+        # Anonymize record text data, this is preferred when only trying to replicate relations between models
+        # also, this option will be forced when the user does not belong to the export group, just in case
+        if (
+            (self.mode == "demo" or not self.env.user.has_group("base.group_allow_export"))
+            and ttype in TEXT_TTYPES
+            and current_value
+        ):
             current_value = "Demo %s" % field_name
             # If the target model has a method for anonymizing the field, use it instead
             if hasattr(record, "_xml_data_generator_get_demo_%s" % field_name):
@@ -243,7 +248,7 @@ class XmlDataGenerator(models.TransientModel):
         return '<?xml version="1.0" ?>\n<odoo>\n%s\n</odoo>\n' % "\n\n".join(xml_records_code)
 
     def _create_xml_data(self, file_strings):
-        # TODO: find a better way to find this path or maybe pass the path through args
+        # TODO: find a better way to find this path or maybe pass the path through a field
         # this is asssuming we have the standard module -> models -> model.py structure
         module_path = dirname(dirname(__file__))
         data_dir = join(module_path, "xml_exported_data")
