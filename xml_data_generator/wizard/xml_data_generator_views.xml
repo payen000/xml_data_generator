@@ -6,11 +6,17 @@
             <form>
                 <sheet>
                     <group>
+                        <field name="model_name" />
+                        <field name="res_id" />
                         <field name="mode" />
                         <field name="recursive_depth" />
                         <field name="avoid_duplicates" />
                         <field name="ignore_access" />
-                        <field name="show_data_as_error" />
+                        <field name="show_data" invisible="1" />
+                        <field
+                            name="fetched_data"
+                            attrs="{'invisible': ['|', ('show_data', '=', False), ('fetched_data', '=', False)]}"
+                        />
                     </group>
                     <footer>
                         <button
