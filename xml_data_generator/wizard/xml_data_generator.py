@@ -14,6 +14,8 @@ UNWANTED_FIELDS = {
     "write_date",
     "__last_update",
 }
+# Do not copy documents
+UNWANTED_TTYPES = {"binary"}
 # "&" MUST go first to avoid ruining the escape of the other characters
 SPECIAL_CHARACTER_MAP = {
     "&": "&amp;",
@@ -40,23 +42,32 @@ class XmlDataGenerator(models.TransientModel):
         required=True,
         help="Wether to anonymize Char/Text fields or not.",
     )
-    recursive_depth = fields.Integer(
-        default=0,
+    recursive_depth = fields.Selection(
+        [
+            ("0", "This record"),
+            ("1", "This record and first related records"),
+            ("2", "This record, first related records and second related records"),
+            ("3", "This record, first related records, second related records and third related records"),
+        ],
+        string="Records to export",
+        default="0",
         required=True,
-        help="How many levels of recursion will be used to export related records.",
     )
     ignore_access = fields.Boolean(
+        string="Ignore Restricted Fields",
         default=False,
         help="Determines if a field must be ignored in case of access error.",
     )
-    show_data_as_error = fields.Boolean(
+    show_data = fields.Boolean(
+        string="Show Data in Wizard Window",
         default=True,
-        help="Show an error message with the data instead of exporting to a file.",
+        help="Show the data inside the wizard window instead of exporting to files.",
     )
     avoid_duplicates = fields.Boolean(
         default=True,
         help="Wether to avoid exporting data that already has an external ID by xml or not.",
     )
+    fetched_data = fields.Text(readonly=True)
 
     def _get_records_to_export(self):
         if self.model_name not in self.env:
@@ -117,15 +128,14 @@ class XmlDataGenerator(models.TransientModel):
         return "%s_auto_%s" % (table_name, id_)
 
     def _prepare_data_to_export(self, records, data, dependency_tree, dependency_data, recursive_depth):
-        if recursive_depth > self.recursive_depth:
-            return data
+        if recursive_depth > int(self.recursive_depth):
+            return data, dependency_data
         model_name = records._name
         xml_model = model_name.replace(".", "_")
         field_objects = records._fields
+        # TODO: review if images must be omitted or not (are binary fields ok?)
         field_names = [
-            field
-            for field in field_objects
-            if field_objects[field].compute is None and not field.startswith("image_") and field not in UNWANTED_FIELDS
+            field for field in field_objects if field_objects[field].compute is None and field not in UNWANTED_FIELDS
         ]
         field_records = self.env["ir.model.fields"].search(
             [
@@ -141,7 +151,12 @@ class XmlDataGenerator(models.TransientModel):
                 continue
             record_data = {"model_name": model_name, "xml_model": xml_model}
             for field in field_names:
+                field_record = field_records.filtered(lambda f: f.name == field)
+                if not field_record:
+                    continue
                 ttype = field_records.filtered(lambda f: f.name == field).ttype
+                if ttype in UNWANTED_TTYPES:
+                    continue
                 field_values = self._xml_data_generator_get_field_data(record, field, field_objects[field], ttype)
                 if ttype != "one2many":
                     record_data.update(field_values)
@@ -248,6 +263,7 @@ class XmlDataGenerator(models.TransientModel):
         return '<?xml version="1.0" ?>\n<odoo>\n%s\n</odoo>\n' % "\n\n".join(xml_records_code)
 
     def _create_xml_data(self, file_strings):
+        # NOTE: although this is fully implemented, a practical way to implement it in dev instances must be found
         # TODO: find a better way to find this path or maybe pass the path through a field
         # this is asssuming we have the standard module -> models -> model.py structure
         module_path = dirname(dirname(__file__))
@@ -260,12 +276,25 @@ class XmlDataGenerator(models.TransientModel):
             data_path = join(data_dir, "%s.xml" % model_name)
             with open(data_path, "w") as xml_file:
                 xml_file.write(xml_data_string)
+        return self._get_rebuilt_action(file_strings)
 
-    def _show_xml_data(self, file_strings):
+    def _get_rebuilt_action(self, file_strings):
         files_list = [file_strings[model] for model in file_strings]
         files_list.reverse()
         data2show = "\n".join(files_list)
-        raise UserError(data2show)
+        self.fetched_data = data2show
+        return {
+            "name": "Export to XML",
+            "type": "ir.actions.act_window",
+            "res_model": "xml.data.generator",
+            "view_mode": "form",
+            "res_id": self.id,
+            "target": "new",
+            "context": {
+                "default_model_name": self.model_name,
+                "default_res_id": self.res_id,
+            },
+        }
 
     def action_export_to_xml(self):
         self.ensure_one()
@@ -282,7 +311,7 @@ class XmlDataGenerator(models.TransientModel):
         sorted_xml_dependencies = topological_sort(dependency_data["record_dependencies"])
         sorted_model_dependencies = topological_sort(dependency_data["model_dependencies"])
         # Topological sort leaves out elements without dependencies, so we must add them to the beginning of the list
-        # since the list of files are reverted at the end
+        # since the list of files is reverted at the end
         sorted_model_dependencies = (
             list(set(list(data2export.keys())) - set(sorted_model_dependencies)) + sorted_model_dependencies
         )
@@ -298,25 +327,13 @@ class XmlDataGenerator(models.TransientModel):
                 sorted_model_dependencies_dict,
             )
             file_strings.update({model: xml_data_string})
-        if self.show_data_as_error:
-            self._show_xml_data(file_strings)
-        self._create_xml_data(file_strings)
+        if self.show_data:
+            return self._get_rebuilt_action(file_strings)
+        return self._create_xml_data(file_strings)
 
     @api.onchange("recursive_depth")
     def _check_recursive_depth(self):
-        if self.recursive_depth > 3:
-            self.recursive_depth = 3
-            return {
-                "warning": {
-                    "title": _("Maximum recommended recursion level exceeded by far."),
-                    "message": _(
-                        "Exceeding 3 recursion levels is not recommended, as record relations "
-                        "can grow rapidly without warning and the export operation would certainly "
-                        "result in a stuck system. Going back to level 3."
-                    ),
-                }
-            }
-        if self.recursive_depth > 2:
+        if int(self.recursive_depth) > 2:
             return {
                 "warning": {
                     "title": _("Maximum recommended recursion level exceeded."),
