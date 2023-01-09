@@ -5,6 +5,11 @@
         <field name="arch" type="xml">
             <form>
                 <sheet>
+                    <p class="oe_grey">
+                        This tool will show this record's non-computed fields as if it were a record defined by
+                        XML. This is a harmless procedure with no consequence to the records themselves. Depending
+                        on the 'Records to Export' field, the field values of related records will also be shown.
+                    </p>
                     <group>
                         <field name="model_name" />
                         <field name="res_id" />

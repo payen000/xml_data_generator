@@ -49,7 +49,7 @@ class XmlDataGenerator(models.TransientModel):
             ("2", "This record, first related records and second related records"),
             ("3", "This record, first related records, second related records and third related records"),
         ],
-        string="Records to export",
+        string="Records to Export",
         default="0",
         required=True,
     )
