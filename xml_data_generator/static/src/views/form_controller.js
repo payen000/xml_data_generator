@@ -40,7 +40,7 @@ odoo.define("xml_data_generator.FormController", function (require) {
                         view_mode: "form",
                         target: "new",
                         context: {
-                            default_res_id: this.model.loadParams.res_id,
+                            default_res_id: this.controlPanelProps.actionMenus.activeIds[0],
                             default_model_name: this.model.loadParams.modelName,
                         },
                     });
