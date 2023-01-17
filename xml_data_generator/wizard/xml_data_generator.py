@@ -1,6 +1,3 @@
-from os import mkdir
-from os.path import dirname, exists, join
-
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError
 from odoo.loglevels import ustr
@@ -34,8 +31,13 @@ class XmlDataGenerator(models.TransientModel):
     _name = "xml.data.generator"
     _description = "Model to handle exporting record data to XML files."
 
-    model_name = fields.Char(required=True)
-    res_id = fields.Integer("Record ID", required=True)
+    model_name = fields.Char()
+    res_id = fields.Integer("Record ID")
+    search_by_external_id = fields.Boolean()
+    xml_data_generator_external_id = fields.Char(
+        string="Record External ID",
+        help="Real external ID - if any, or proposed external ID, if one does not exist.",
+    )
     mode = fields.Selection(
         [("demo", "Export Anonymized Data"), ("real", "Export Real Data")],
         default="real",
@@ -58,22 +60,62 @@ class XmlDataGenerator(models.TransientModel):
         default=False,
         help="Determines if a field must be ignored in case of access error.",
     )
-    show_data = fields.Boolean(
-        string="Show Data in Wizard Window",
-        default=True,
-        help="Show the data inside the wizard window instead of exporting to files.",
-    )
     avoid_duplicates = fields.Boolean(
         default=True,
         help="Wether to avoid exporting data that already has an external ID by xml or not.",
     )
     fetched_data = fields.Text(readonly=True)
 
-    def _get_records_to_export(self):
-        if self.model_name not in self.env:
-            raise UserError(_("Please enter a valid model name."))
-        records = self.env[self.model_name].browse(self.res_id)
-        return records
+    @api.model
+    def default_get(self, searched_fields):
+        res = super().default_get(searched_fields)
+        model = res.get("model_name", self._context.get("active_model", ""))
+        res_id = res.get("res_id", self._context.get("active_id"))
+        ir_model_data = (
+            self.env["ir.model.data"]
+            .sudo()
+            .search_read(
+                domain=[("model", "=", model), ("res_id", "=", res_id)],
+                fields=["module", "name"],
+            )
+        )
+        if not ir_model_data:
+            suffix = "demo" if self.mode == "demo" else "auto"
+            res["xml_data_generator_external_id"] = "__xml_data_generator_virtual__.%s_%s_%s" % (
+                model.replace(".", "_"),
+                suffix,
+                res_id,
+            )
+            return res
+        module = ir_model_data[0]["module"]
+        name = ir_model_data[0]["name"]
+        res["xml_data_generator_external_id"] = "%s.%s" % (module, name)
+        return res
+
+    def _prepare_record_to_export(self):
+        model_name = self.model_name
+        res_id = self.res_id
+        if self.search_by_external_id:
+            external_id = self.xml_data_generator_external_id
+            if not external_id.startswith("__xml_data_generator_virtual__."):
+                return self.env.ref(external_id)
+            suffix = "_demo_" if self.mode == "demo" else "_auto_"
+            record_name = external_id.split("__xml_data_generator_virtual__.", 1)[1]
+            record_name_parts = record_name.split(suffix, 1)
+            model_name = record_name_parts[0].replace("_", ".")
+            res_id = int(record_name_parts[-1])
+        return self.env[model_name].browse(res_id)
+
+    def _get_record_to_export(self):
+        try:
+            return self._prepare_record_to_export()
+        except Exception:
+            raise UserError(
+                _(
+                    "Record not found: please make sure the entered External ID exists in the database or is a valid "
+                    "proposed xml_data_generator External ID."
+                )
+            )
 
     def _xml_data_generator_get_field_data(self, record, field_name, field_object, ttype):
         # Check access to fields, and if access is being ignored, return empty field
@@ -124,8 +166,8 @@ class XmlDataGenerator(models.TransientModel):
                 return None
             return record_xid
         if self.mode == "demo":
-            return "%s_demo_%s" % (table_name, id_)
-        return "%s_auto_%s" % (table_name, id_)
+            return "__xml_data_generator_virtual__.%s_demo_%s" % (table_name, id_)
+        return "__xml_data_generator_virtual__.%s_auto_%s" % (table_name, id_)
 
     def _prepare_data_to_export(self, records, data, dependency_tree, dependency_data, recursive_depth):
         if recursive_depth > int(self.recursive_depth):
@@ -133,9 +175,13 @@ class XmlDataGenerator(models.TransientModel):
         model_name = records._name
         xml_model = model_name.replace(".", "_")
         field_objects = records._fields
-        # TODO: review if images must be omitted or not (are binary fields ok?)
+        # TODO: see if some comodels must be omitted, such as mail.message
         field_names = [
-            field for field in field_objects if field_objects[field].compute is None and field not in UNWANTED_FIELDS
+            field
+            for field in field_objects
+            if field_objects[field].compute is None
+            and field_objects[field].type not in UNWANTED_TTYPES
+            and field not in UNWANTED_FIELDS
         ]
         field_records = self.env["ir.model.fields"].search(
             [
@@ -155,8 +201,6 @@ class XmlDataGenerator(models.TransientModel):
                 if not field_record:
                     continue
                 ttype = field_records.filtered(lambda f: f.name == field).ttype
-                if ttype in UNWANTED_TTYPES:
-                    continue
                 field_values = self._xml_data_generator_get_field_data(record, field, field_objects[field], ttype)
                 if ttype != "one2many":
                     record_data.update(field_values)
@@ -236,12 +280,10 @@ class XmlDataGenerator(models.TransientModel):
         }
         for external_id, dataset in data.items():
             xml_code = []
-            model_name = dataset["model_name"]
+            model_name = dataset.pop("model_name")
             dataset.pop("xml_model")
             xml_code.append('    <record id="%s" model="%s">' % (external_id, model_name))
             for field_name in dataset:
-                if field_name == "model_name":
-                    continue
                 field_value = dataset[field_name]["value"]
                 field_ttype = dataset[field_name]["ttype"]
                 field_related_model = dataset[field_name]["related_model"]
@@ -261,22 +303,6 @@ class XmlDataGenerator(models.TransientModel):
             xml_code.append("    </record>")
             xml_records_code.append("\n".join(xml_code))
         return '<?xml version="1.0" ?>\n<odoo>\n%s\n</odoo>\n' % "\n\n".join(xml_records_code)
-
-    def _create_xml_data(self, file_strings):
-        # NOTE: although this is fully implemented, a practical way to implement it in dev instances must be found
-        # TODO: find a better way to find this path or maybe pass the path through a field
-        # this is asssuming we have the standard module -> models -> model.py structure
-        module_path = dirname(dirname(__file__))
-        data_dir = join(module_path, "xml_exported_data")
-        if not exists(data_dir):
-            mkdir(data_dir)
-        for model in file_strings:
-            model_name = model.replace(".", "_")
-            xml_data_string = file_strings[model]
-            data_path = join(data_dir, "%s.xml" % model_name)
-            with open(data_path, "w") as xml_file:
-                xml_file.write(xml_data_string)
-        return self._get_rebuilt_action(file_strings)
 
     def _get_rebuilt_action(self, file_strings):
         files_list = [file_strings[model] for model in file_strings]
@@ -298,7 +324,7 @@ class XmlDataGenerator(models.TransientModel):
 
     def action_export_to_xml(self):
         self.ensure_one()
-        records2export = self._get_records_to_export()
+        records2export = self._get_record_to_export()
         if not records2export:
             raise UserError(_("No records found to export."))
         data2export, dependency_data = self._prepare_data_to_export(
@@ -311,9 +337,9 @@ class XmlDataGenerator(models.TransientModel):
         sorted_xml_dependencies = topological_sort(dependency_data["record_dependencies"])
         sorted_model_dependencies = topological_sort(dependency_data["model_dependencies"])
         # Topological sort leaves out elements without dependencies, so we must add them to the beginning of the list
-        # since the list of files is reverted at the end
+        # since the list of files is inverted at the end
         sorted_model_dependencies = (
-            list(set(list(data2export.keys())) - set(sorted_model_dependencies)) + sorted_model_dependencies
+            list(set(data2export.keys()) - set(sorted_model_dependencies)) + sorted_model_dependencies
         )
         sorted_model_dependencies_dict = {model: i for i, model in enumerate(sorted_model_dependencies)}
 
@@ -327,9 +353,7 @@ class XmlDataGenerator(models.TransientModel):
                 sorted_model_dependencies_dict,
             )
             file_strings.update({model: xml_data_string})
-        if self.show_data:
-            return self._get_rebuilt_action(file_strings)
-        return self._create_xml_data(file_strings)
+        return self._get_rebuilt_action(file_strings)
 
     @api.onchange("recursive_depth")
     def _check_recursive_depth(self):

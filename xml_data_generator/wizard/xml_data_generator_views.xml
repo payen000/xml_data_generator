@@ -6,22 +6,64 @@
             <form>
                 <sheet>
                     <p class="oe_grey">
-                        This tool will show this record's non-computed fields as if it were a record defined by
-                        XML. This is a harmless procedure with no consequence to the records themselves. Depending
-                        on the 'Records to Export' field, the field values of related records will also be shown.
+                        <span style="font-weight: bold;">This tool</span> will show a record's non-computed fields
+                        as if it were a record defined by XML. This is a harmless procedure with no consequence to the
+                        records themselves. <span style="color: red; font-weight: bold;">This will not create nor
+                        modify any data.</span> Depending on the
+                        <span style="font-weight: bold;">Records to Export field</span>, the field values of
+                        related records will also be shown, in the correct dependency order.<br /><br />
+                        A record's External ID, in case it does not already exist, will be computed as follows:<br />
+                        <br /> External ID = __xml_data_generator_virtual__.<span
+                            style="font-weight: bold;"
+                        >model_name</span>_<span style="font-weight: bold;">suffix</span>_<span
+                            style="font-weight: bold;"
+                        >id</span><br /><br />
+                        where
                     </p>
+                    <ul class="oe_grey">
+                        <li><span style="font-weight: bold;">model_name</span>
+                        is the name of the model with underscores instead of dots;</li>
+                        <li><span style="font-weight: bold;">suffix</span>
+                        is either "demo" or "auto" depending on Mode; and</li>
+                        <li><span style="font-weight: bold;">id</span>
+                        is the name database id of the record.</li>
+                    </ul>
+                    <p class="oe_grey">
+                        Please note that those external IDs do not exist and are computed on the fly to demonstrate
+                        the record's relations to other records.
+                    </p>
+                    <separator string="Record to export" />
                     <group>
-                        <field name="model_name" />
-                        <field name="res_id" />
+                        <field name="search_by_external_id" autofocus="" />
+                        <field
+                            name="model_name"
+                            attrs="{
+                            'required': [('search_by_external_id', '=', False)],
+                            'invisible': [('search_by_external_id', '=', True)],
+                        }"
+                        />
+                        <field
+                            name="res_id"
+                            attrs="{
+                            'required': [('search_by_external_id', '=', False)],
+                            'invisible': [('search_by_external_id', '=', True)],
+                        }"
+                        />
+                        <field
+                            name="xml_data_generator_external_id"
+                            attrs="{
+                            'required': [('search_by_external_id', '=', True)],
+                            'invisible': [('search_by_external_id', '=', False)],
+                        }"
+                        />
+                    </group>
+                    <separator string="Options" />
+                    <group>
                         <field name="mode" />
                         <field name="recursive_depth" />
                         <field name="avoid_duplicates" />
                         <field name="ignore_access" />
-                        <field name="show_data" invisible="1" />
-                        <field
-                            name="fetched_data"
-                            attrs="{'invisible': ['|', ('show_data', '=', False), ('fetched_data', '=', False)]}"
-                        />
+                        <field name="fetched_data" attrs="{'invisible': [('fetched_data', '=', False)]}" />
                     </group>
                     <footer>
                         <button
