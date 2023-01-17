@@ -118,6 +118,22 @@ class XmlDataGenerator(models.TransientModel):
             )
 
     def _xml_data_generator_get_field_data(self, record, field_name, field_object, ttype):
+        """ Get the field values for a given record.
+
+        :param record: a record of any given comodel.
+        :type record: recordset
+        :param field_name: the name of the field to be fetched
+        :type field_name: string
+        :param field_object: the python field object (not the one in the database)
+        :type field_object: odoo.fields
+
+        returns: dict - a dictionary that is empty if the field's value is equal to its default value,
+        otherwise it contains:
+
+        value: the field's value, be it a demo value or a real value, can be any primitive or class
+        ttype: the field's ttype - string
+        related_model: the field's comodel name, if any - string
+        """
         # Check access to fields, and if access is being ignored, return empty field
         try:
             current_value = record[field_name]
@@ -151,11 +167,12 @@ class XmlDataGenerator(models.TransientModel):
             field_name: {
                 "value": current_value,
                 "ttype": ttype,
-                "related_model": current_value._name if ttype in ["one2many", "many2one", "many2many"] else False,
+                "related_model": field_object.comodel_name,
             }
         }
 
-    def _prepare_external_id(self, record_xid, table_name, id_, recursive_depth, is_child_record=False):
+    def _prepare_external_id(self, record_xid, model_name, id_, recursive_depth, is_child_record=False):
+        """ Returns either the real or a processed demo External ID."""
         if (
             len(record_xid) > 0
             and "_export" not in record_xid
@@ -166,29 +183,41 @@ class XmlDataGenerator(models.TransientModel):
                 return None
             return record_xid
         if self.mode == "demo":
-            return "__xml_data_generator_virtual__.%s_demo_%s" % (table_name, id_)
-        return "__xml_data_generator_virtual__.%s_auto_%s" % (table_name, id_)
+            return "__xml_data_generator_virtual__.%s_demo_%s" % (model_name, id_)
+        return "__xml_data_generator_virtual__.%s_auto_%s" % (model_name, id_)
 
     def _prepare_data_to_export(self, records, data, dependency_tree, dependency_data, recursive_depth):
+        """ Recursive method to traverse a recordset's fields and record dependencies.
+
+        :param records: a recordset
+        :type records: recorset
+        :param data: the same data this method returns
+        :type data: dict
+        :param dependency_tree: current recordset's dependencies
+        :type dependency_tree: dict
+        :param dependency_data: whole tree's dependencies
+        :type dependency_data: dict
+        :param recursive_depth: how many levels of depth related records will be traversed
+        :type recursive_depth: integer
+
+        returns:
+
+        data: a dict containing all field values for the whole tree
+        dependency_data: a dict of dicts containing which records and models depend on each other
+        """
         if recursive_depth > int(self.recursive_depth):
             return data, dependency_data
         model_name = records._name
         xml_model = model_name.replace(".", "_")
         field_objects = records._fields
-        # TODO: see if some comodels must be omitted, such as mail.message
-        field_names = [
-            field
+        # TODO: see if some comodels should be omitted, such as mail.message
+        field_map = {
+            field: field_objects[field]
             for field in field_objects
             if field_objects[field].compute is None
             and field_objects[field].type not in UNWANTED_TTYPES
             and field not in UNWANTED_FIELDS
-        ]
-        field_records = self.env["ir.model.fields"].search(
-            [
-                ("model", "=", model_name),
-                ("name", "in", list(field_names)),
-            ]
-        )
+        }
         for record in records:
             external_id = self._prepare_external_id(
                 record.get_external_id()[record.id], xml_model, record.id, recursive_depth
@@ -196,12 +225,9 @@ class XmlDataGenerator(models.TransientModel):
             if not external_id:
                 continue
             record_data = {"model_name": model_name, "xml_model": xml_model}
-            for field in field_names:
-                field_record = field_records.filtered(lambda f: f.name == field)
-                if not field_record:
-                    continue
-                ttype = field_records.filtered(lambda f: f.name == field).ttype
-                field_values = self._xml_data_generator_get_field_data(record, field, field_objects[field], ttype)
+            for field in field_map:
+                ttype = field_map[field].type
+                field_values = self._xml_data_generator_get_field_data(record, field, field_map[field], ttype)
                 if ttype != "one2many":
                     record_data.update(field_values)
                 if ttype not in ["one2many", "many2one", "many2many"] or not field_values:
@@ -220,6 +246,9 @@ class XmlDataGenerator(models.TransientModel):
                     child_external_ids.append(child_external_id)
                     # Do not add one2many records to dependencies (only many2one and many2many)
                     if ttype != "one2many":
+                        # If parent is not in its child's dependencies, add child to dependencies
+                        # this check is used to avoid circular dependencies.
+                        # Same goes for model dependencies.
                         if external_id not in dependency_tree.get(child_external_id, set()):
                             dependency_tree.setdefault(external_id, set()).add(child_external_id)
                         if model_name not in dependency_data["model_dependencies"].get(child_model, set()):
