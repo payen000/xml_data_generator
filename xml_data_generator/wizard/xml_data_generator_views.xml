@@ -6,25 +6,21 @@
             <form>
                 <sheet>
                     <p class="oe_grey">
-                        <span style="font-weight: bold;">This tool</span> will show a record's non-computed fields
-                        as if it were a record defined by XML. This is a harmless procedure with no consequence to the
-                        records themselves. <span style="color: red; font-weight: bold;">This will not create nor
-                        modify any data.</span> Depending on the
+                        <span style="font-weight: bold;">This tool</span> will show a record's non-computed,
+                        non-related fields as if it were a record defined by XML. This is a harmless procedure
+                        with no consequence to the records themselves. <span style="color: red; font-weight: bold;">
+                        This will not create nor modify any data.</span> Depending on the
                         <span style="font-weight: bold;">Records to Export field</span>, the field values of
                         related records will also be shown, in the correct dependency order.<br /><br />
                         A record's External ID, in case it does not already exist, will be computed as follows:<br />
                         <br /> External ID = __xml_data_generator_virtual__.<span
                             style="font-weight: bold;"
-                        >model_name</span>_<span style="font-weight: bold;">suffix</span>_<span
-                            style="font-weight: bold;"
-                        >id</span><br /><br />
+                        >model_name</span>_<span style="font-weight: bold;">id</span><br /><br />
                         where
                     </p>
                     <ul class="oe_grey">
                         <li><span style="font-weight: bold;">model_name</span>
                         is the name of the model with underscores instead of dots;</li>
-                        <li><span style="font-weight: bold;">suffix</span>
-                        is either "demo" or "auto" depending on Mode; and</li>
                         <li><span style="font-weight: bold;">id</span>
                         is the name database id of the record.</li>
                     </ul>

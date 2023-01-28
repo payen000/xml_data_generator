@@ -1,5 +1,5 @@
 from odoo import _, api, fields, models
-from odoo.exceptions import AccessError, UserError
+from odoo.exceptions import AccessError, MissingError
 from odoo.loglevels import ustr
 from odoo.tools import topological_sort
 
@@ -11,8 +11,10 @@ UNWANTED_FIELDS = {
     "write_date",
     "__last_update",
 }
-# Do not copy documents
-UNWANTED_TTYPES = {"binary"}
+# Do not copy documents or images
+UNWANTED_TTYPES = {
+    "binary",
+}
 # "&" MUST go first to avoid ruining the escape of the other characters
 SPECIAL_CHARACTER_MAP = {
     "&": "&amp;",
@@ -25,6 +27,8 @@ TEXT_TTYPES = {
     "text",
     "html",
 }
+# Length that will be used to break into a new line in XML data (for linting purposes)
+MAX_ROW_LENGTH = 119
 
 
 class XmlDataGenerator(models.TransientModel):
@@ -56,13 +60,14 @@ class XmlDataGenerator(models.TransientModel):
         required=True,
     )
     ignore_access = fields.Boolean(
-        string="Ignore Restricted Fields",
+        string="Show Demo Data For Restricted Fields",
         default=False,
         help="Determines if a field must be ignored in case of access error.",
     )
     avoid_duplicates = fields.Boolean(
+        string="Avoid showing records that have an External ID",
         default=True,
-        help="Wether to avoid exporting data that already has an external ID by xml or not.",
+        help="Wether to avoid exporting data that already has an external ID by XML or not.",
     )
     fetched_data = fields.Text(readonly=True)
 
@@ -80,10 +85,8 @@ class XmlDataGenerator(models.TransientModel):
             )
         )
         if not ir_model_data:
-            suffix = "demo" if self.mode == "demo" else "auto"
-            res["xml_data_generator_external_id"] = "__xml_data_generator_virtual__.%s_%s_%s" % (
+            res["xml_data_generator_external_id"] = "__xml_data_generator_virtual__.%s_auto_%s" % (
                 model.replace(".", "_"),
-                suffix,
                 res_id,
             )
             return res
@@ -92,33 +95,24 @@ class XmlDataGenerator(models.TransientModel):
         res["xml_data_generator_external_id"] = "%s.%s" % (module, name)
         return res
 
-    def _prepare_record_to_export(self):
+    def _get_record_to_export(self):
         model_name = self.model_name
         res_id = self.res_id
         if self.search_by_external_id:
             external_id = self.xml_data_generator_external_id
-            if not external_id.startswith("__xml_data_generator_virtual__."):
-                return self.env.ref(external_id)
-            suffix = "_demo_" if self.mode == "demo" else "_auto_"
+            separator = "_auto_"
+            if not (external_id.startswith("__xml_data_generator_virtual__.") and separator in external_id):
+                return self.env.ref(external_id, raise_if_not_found=False)
+            # Allow searching for fake external id
             record_name = external_id.split("__xml_data_generator_virtual__.", 1)[1]
-            record_name_parts = record_name.split(suffix, 1)
-            model_name = record_name_parts[0].replace("_", ".")
-            res_id = int(record_name_parts[-1])
+            separator_position = record_name.rfind(separator)
+            separator_length = len(separator)
+            model_name = record_name[:separator_position].replace("_", ".")
+            res_id = int(record_name[separator_position + separator_length :])
         return self.env[model_name].browse(res_id)
 
-    def _get_record_to_export(self):
-        try:
-            return self._prepare_record_to_export()
-        except Exception:
-            raise UserError(
-                _(
-                    "Record not found: please make sure the entered External ID exists in the database or is a valid "
-                    "proposed xml_data_generator External ID."
-                )
-            )
-
     def _xml_data_generator_get_field_data(self, record, field_name, field_object, ttype):
-        """ Get the field values for a given record.
+        """Get the field values for a given record.
 
         :param record: a record of any given comodel.
         :type record: recordset
@@ -129,30 +123,28 @@ class XmlDataGenerator(models.TransientModel):
 
         returns: dict - a dictionary that is empty if the field's value is equal to its default value,
         otherwise it contains:
-
-        value: the field's value, be it a demo value or a real value, can be any primitive or class
-        ttype: the field's ttype - string
-        related_model: the field's comodel name, if any - string
+            field_name: the field's name
+            value: the field's value, be it a demo value or a real value, can be any primitive or class
+            ttype: the field's ttype - string
+            related_model: the field's comodel name, if any - string
         """
-        # Check access to fields, and if access is being ignored, return empty field
+        # Check access to fields, and if restricted fields are being ignored, return 'demo' field value,
+        # otherwise raise usual access error.
+        fetch_demo_field = False
         try:
             current_value = record[field_name]
             default_value = field_object.default and field_object.default(record) or False
+            # Convert html Markup data to string
+            if ttype == "html":
+                current_value = ustr(current_value) if current_value else False
+                default_value = ustr(default_value) if default_value else False
         except AccessError as e:
             if not self.ignore_access:
                 raise AccessError(e)
-            return {}
-        # Convert html Markup data to string
-        if ttype == "html":
-            current_value = ustr(current_value) if current_value else False
-            default_value = ustr(default_value) if default_value else False
+            fetch_demo_field = True
         # Anonymize record text data, this is preferred when only trying to replicate relations between models
-        # also, this option will be forced when the user does not belong to the export group, just in case
-        if (
-            (self.mode == "demo" or not self.env.user.has_group("base.group_allow_export"))
-            and ttype in TEXT_TTYPES
-            and current_value
-        ):
+        # also, this option will be forced when the user does not have field access to avoid missing required fields
+        if (self.mode == "demo" or fetch_demo_field) and ttype in TEXT_TTYPES and current_value:
             current_value = "Demo %s" % field_name
             # If the target model has a method for anonymizing the field, use it instead
             if hasattr(record, "_xml_data_generator_get_demo_%s" % field_name):
@@ -172,22 +164,15 @@ class XmlDataGenerator(models.TransientModel):
         }
 
     def _prepare_external_id(self, record_xid, model_name, id_, recursive_depth, is_child_record=False):
-        """ Returns either the real or a processed demo External ID."""
-        if (
-            len(record_xid) > 0
-            and "_export" not in record_xid
-            and "import_" not in record_xid
-            and "base_import" not in record_xid
-        ):
-            if self.avoid_duplicates and recursive_depth > 0 and not is_child_record:
-                return None
-            return record_xid
-        if self.mode == "demo":
-            return "__xml_data_generator_virtual__.%s_demo_%s" % (model_name, id_)
-        return "__xml_data_generator_virtual__.%s_auto_%s" % (model_name, id_)
+        """Returns either the real or a processed placeholder External ID."""
+        if len(record_xid) == 0:
+            return "__xml_data_generator_virtual__.%s_auto_%s" % (model_name, id_)
+        if self.avoid_duplicates and recursive_depth > 0 and not is_child_record:
+            return None
+        return record_xid
 
     def _prepare_data_to_export(self, records, data, dependency_tree, dependency_data, recursive_depth):
-        """ Recursive method to traverse a recordset's fields and record dependencies.
+        """Recursive method to traverse a recordset's fields and record dependencies.
 
         :param records: a recordset
         :type records: recorset
@@ -267,34 +252,41 @@ class XmlDataGenerator(models.TransientModel):
         return data, dependency_data
 
     def _prepare_xml_row_to_append(self, field_name, field_value, field_ttype, field_related_model):
-        row_dict = {"tab": "    ", "field": field_name}
+        row_dict = {"t": "    ", "field": field_name}
         if field_ttype not in ["many2many", "many2one"]:
             row_dict["field_value"] = field_value
             if field_ttype == "boolean":
-                return '%(tab)s%(tab)s<field name="%(field)s" eval="%(field_value)s" />' % row_dict
-            return '%(tab)s%(tab)s<field name="%(field)s">%(field_value)s</field>' % row_dict
+                return '%(t)s%(t)s<field name="%(field)s" eval="%(field_value)s" />' % row_dict
+            return '%(t)s%(t)s<field name="%(field)s">%(field_value)s</field>' % row_dict
         field_related_model.replace(".", "_")
         external_ids = []
         for record_xid in field_value:
+            # If field is many2one, return its row, else keep appending external IDs to compute many2many row
             if field_ttype == "many2one":
                 row_dict["ref_value"] = record_xid
-                return '%(tab)s%(tab)s<field name="%(field)s" ref="%(ref_value)s" />' % row_dict
+                row = '%(t)s%(t)s<field name="%(field)s" ref="%(ref_value)s" />' % row_dict
+                if len(row) > MAX_ROW_LENGTH:
+                    row = (
+                        "%(t)s%(t)s<field\n"
+                        '%(t)s%(t)s%(t)sname="%(field)s"\n'
+                        '%(t)s%(t)s%(t)sref="%(ref_value)s"\n'
+                        "%(t)s%(t)s/>"
+                    ) % row_dict
+                return '%(t)s%(t)s<field name="%(field)s" ref="%(ref_value)s" />' % row_dict
             external_ids.append("ref('%s')" % record_xid)
         if not external_ids:
             return None
-        row_dict["eval_value"] = "[(6, 0, [%s])]" % ", ".join(external_ids)
-        row = '%(tab)s%(tab)s<field name="%(field)s" eval="%(eval_value)s" />' % row_dict
-        # Pre-commit friendly (but hardcoded so it bad)
-        if len(row) > 119:
-            row_dict["external_ids"] = ",\n                ".join(external_ids)
+        row_dict["eval_value"] = "[Command.set([%s])]" % ", ".join(external_ids)
+        row = '%(t)s%(t)s<field name="%(field)s" eval="%(eval_value)s" />' % row_dict
+        if len(row) > MAX_ROW_LENGTH:
+            row_dict["external_ids"] = ",\n%(t)s%(t)s%(t)s%(t)s".join(external_ids) % row_dict
             row_dict["eval_value"] = (
-                "[(6, 0, [\n%(tab)s%(tab)s%(tab)s%(tab)s%(external_ids)s,\n%(tab)s%(tab)s%(tab)s])]" % row_dict
+                "[Command.set([\n%(t)s%(t)s%(t)s%(t)s%(external_ids)s,\n%(t)s%(t)s%(t)s])]" % row_dict
             )
-            # TODO: look for a better way to format these ugly strings
             row = (
-                '%(tab)s%(tab)s<field\n%(tab)s%(tab)s%(tab)sname="%(field)s"'
-                '\n%(tab)s%(tab)s%(tab)seval="%(eval_value)s"'
-                "\n%(tab)s%(tab)s/>" % row_dict
+                '%(t)s%(t)s<field\n%(t)s%(t)s%(t)sname="%(field)s"'
+                '\n%(t)s%(t)s%(t)seval="%(eval_value)s"'
+                "\n%(t)s%(t)s/>" % row_dict
             )
         return row
 
@@ -354,8 +346,15 @@ class XmlDataGenerator(models.TransientModel):
     def action_export_to_xml(self):
         self.ensure_one()
         records2export = self._get_record_to_export()
-        if not records2export:
-            raise UserError(_("No records found to export."))
+        if not records2export and self.search_by_external_id:
+            raise MissingError(
+                "\n".join(
+                    [
+                        _("Record does not exist or has been deleted."),
+                        _("(External ID: %s, User: %s)", self.xml_data_generator_external_id, self.env.uid),
+                    ]
+                )
+            )
         data2export, dependency_data = self._prepare_data_to_export(
             records2export,
             {},
