@@ -3,6 +3,13 @@ from odoo.exceptions import AccessError, MissingError
 from odoo.loglevels import ustr
 from odoo.tools import topological_sort
 
+RECURSIVE_DEPTH_STATES = [
+    ("0", "This record"),
+    ("1", "This record and first related records"),
+    ("2", "This record, first related records and second related records"),
+    ("3", "This record, first related records, second related records and third related records"),
+]
+# Fields not needed in XML data
 UNWANTED_FIELDS = {
     "id",
     "create_uid",
@@ -51,14 +58,9 @@ class XmlDataGenerator(models.TransientModel):
         help="Wether to anonymize Char/Text fields or not.",
     )
     recursive_depth = fields.Selection(
-        [
-            ("0", "This record"),
-            ("1", "This record and first related records"),
-            ("2", "This record, first related records and second related records"),
-            ("3", "This record, first related records, second related records and third related records"),
-        ],
+        RECURSIVE_DEPTH_STATES,
         string="Records to Export",
-        default="0",
+        default=RECURSIVE_DEPTH_STATES[0][0],
         required=True,
     )
     ignore_access = fields.Boolean(
