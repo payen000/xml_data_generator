@@ -275,12 +275,12 @@ class XmlDataGenerator(models.TransientModel):
             external_ids.append("ref('%s')" % record_xid)
         if not external_ids:
             return None
-        row_dict["eval_value"] = "[Command.set([%s])]" % ", ".join(external_ids)
+        row_dict["eval_value"] = "[(6, 0, [%s])]" % ", ".join(external_ids)
         row = '%(t)s%(t)s<field name="%(field)s" eval="%(eval_value)s" />' % row_dict
         if len(row) > MAX_ROW_LENGTH:
             row_dict["external_ids"] = ",\n%(t)s%(t)s%(t)s%(t)s".join(external_ids) % row_dict
             row_dict["eval_value"] = (
-                "[Command.set([\n%(t)s%(t)s%(t)s%(t)s%(external_ids)s,\n%(t)s%(t)s%(t)s])]" % row_dict
+                "[(6, 0, [\n%(t)s%(t)s%(t)s%(t)s%(external_ids)s,\n%(t)s%(t)s%(t)s])]" % row_dict
             )
             row = (
                 '%(t)s%(t)s<field\n%(t)s%(t)s%(t)sname="%(field)s"'
