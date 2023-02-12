@@ -15,7 +15,7 @@
                         A record's External ID, in case it does not already exist, will be computed as follows:<br />
                         <br /> External ID = __xml_data_generator_virtual__.<span
                             style="font-weight: bold;"
-                        >model_name</span>_<span style="font-weight: bold;">id</span><br /><br />
+                        >model_name</span>_auto_<span style="font-weight: bold;">id</span><br /><br />
                         where
                     </p>
                     <ul class="oe_grey">
@@ -57,16 +57,11 @@
                     <group>
                         <field name="mode" />
                         <field name="recursive_depth" />
-                        <!-- autofocus is necessary here for boolean fields to re-render the footer appropriately
-                        after filling the wizard record with data (this is a bad hack but this way we avoid having
-                        to patch JS further, which would make this harder to migrate and is not worth it IMHO).
-                        Another workaround would be to convert the boolean fields to selection fields, which work
-                        fine with current autofocus-related JS, but I believe that having to select 'Yes' or 'No'
-                        instead of clicking for 'True' and 'False' feels kinda goofy. -->
-                        <field name="avoid_duplicates" autofocus="" />
-                        <field name="ignore_access" autofocus="" />
-                        <field name="fetched_data" attrs="{'invisible': [('fetched_data', '=', False)]}" />
+                        <field name="avoid_duplicates" autofocus=""/>
+                        <field name="ignore_access" autofocus=""/>
                     </group>
+                    <separator string="Results" attrs="{'invisible': [('fetched_data', '=', False)]}" />
+                    <field name="fetched_data" attrs="{'invisible': [('fetched_data', '=', False)]}" nolabel="1" />
                     <footer>
                         <button
                             string="Export to XML"
