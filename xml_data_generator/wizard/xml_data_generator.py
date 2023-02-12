@@ -1,7 +1,7 @@
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, MissingError
 from odoo.loglevels import ustr
-from odoo.tools import topological_sort
+from odoo.tools import misc, topological_sort
 
 RECURSIVE_DEPTH_STATES = [
     ("0", "This record"),
@@ -22,12 +22,13 @@ UNWANTED_FIELDS = {
 UNWANTED_TTYPES = {
     "binary",
 }
-# "&" MUST go first to avoid ruining the escape of the other characters
+# "&" MUST go last to avoid ruining the escape of the other characters
 SPECIAL_CHARACTER_MAP = {
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
+    "&nbsp;": " ",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&amp;": "&;",
 }
 TEXT_TTYPES = {
     "char",
@@ -38,6 +39,12 @@ TEXT_TTYPES = {
 MAX_ROW_LENGTH = 119
 # Special string that will separate model and res_id in external ID
 EXTERNAL_ID_SEPARATOR = "_auto_"
+
+
+def html_to_text(html):
+    for char, char_map in SPECIAL_CHARACTER_MAP.items():
+        html = html.replace(char, char_map)
+    return html
 
 
 class XmlDataGenerator(models.TransientModel):
@@ -73,7 +80,7 @@ class XmlDataGenerator(models.TransientModel):
         default=True,
         help="Wether to avoid exporting data that already has an external ID by XML or not.",
     )
-    fetched_data = fields.Text(readonly=True)
+    fetched_data = fields.Html(readonly=True)
 
     def _prepare_external_id(self, model_name, res_id):
         """Returns either the real or a processed placeholder External ID."""
@@ -118,7 +125,7 @@ class XmlDataGenerator(models.TransientModel):
             res_id = int(record_name[separator_position + separator_length :])
         return self.env[model_name].browse(res_id)
 
-    def _xml_data_generator_get_field_data(self, record, field_name, field_object, ttype):
+    def _xml_data_generator_get_field_data(self, record, field_object):
         """Get the field values for a given record.
 
         :param record: a record of any given comodel.
@@ -138,6 +145,8 @@ class XmlDataGenerator(models.TransientModel):
         # Check access to fields, and if restricted fields are being ignored, return 'demo' field value,
         # otherwise raise usual access error.
         fetch_demo_field = False
+        field_name = field_object.name
+        ttype = field_object.type
         try:
             current_value = record[field_name]
             default_value = field_object.default and field_object.default(record) or False
@@ -148,6 +157,8 @@ class XmlDataGenerator(models.TransientModel):
         except AccessError as e:
             if not self.ignore_access:
                 raise AccessError(e)
+            default_value = "placeholder"
+            current_value = "placeholder"
             fetch_demo_field = True
         # Anonymize record text data, this is preferred when only trying to replicate relations between models
         # also, this option will be forced when the user does not have field access to avoid missing required fields
@@ -160,8 +171,7 @@ class XmlDataGenerator(models.TransientModel):
         if (not ttype == "boolean" and not current_value) or default_value == current_value:
             return {}
         if ttype in TEXT_TTYPES and current_value:
-            for char in SPECIAL_CHARACTER_MAP:
-                current_value = current_value.replace(char, SPECIAL_CHARACTER_MAP[char])
+            current_value = misc.html_escape(current_value)
         return {
             field_name: {
                 "value": current_value,
@@ -170,15 +180,15 @@ class XmlDataGenerator(models.TransientModel):
             }
         }
 
-    def _get_field_map(self, model_name):
+    def _get_field_objects(self, model_name):
         field_objects = self.env[model_name]._fields
-        return {
-            field: field_objects[field]
+        return [
+            field_objects[field]
             for field in field_objects
             if field_objects[field].compute is None
             and field_objects[field].type not in UNWANTED_TTYPES
             and field not in UNWANTED_FIELDS
-        }
+        ]
 
     def _flag_stop_generating_xml_record(self, external_id, recursive_depth):
         """Decide if a record should be exported to XML depending on parameters and iteration."""
@@ -189,51 +199,46 @@ class XmlDataGenerator(models.TransientModel):
     def _prepare_data_to_export(self, records, data, dependency_tree, dependency_data, recursive_depth):
         """Recursive method to traverse a recordset's fields and record dependencies.
 
-        :param records: a recordset
-        :type records: recorset
-        :param data: the same data this method returns
-        :type data: dict
-        :param dependency_tree: current recordset's dependencies
-        :type dependency_tree: dict
-        :param dependency_data: whole tree's dependencies
-        :type dependency_data: dict
-        :param recursive_depth: how many levels of depth related records will be traversed
-        :type recursive_depth: integer
+        :param records: models.Model - a recordset
+        :param data: dict - the same data this method returns
+        :param dependency_tree: dict - current recordset's dependencies
+        :param dependency_data: dict - whole tree's dependencies
+        :param recursive_depth: integer - how many levels of depth related records will be traversed
 
         returns:
-
-        data: a dict containing all field values for the whole tree
-        dependency_data: a dict of dicts containing which records and models depend on each other
+            data: dict - containing all field values for the whole tree
+            dependency_data: dict - of dicts containing which records and models depend on each other
         """
         model_name = records._name
         xml_model = model_name.replace(".", "_")
-        field_map = self._get_field_map(model_name)
+        field_objects = self._get_field_objects(model_name)
         for record in records:
             external_id = self._prepare_external_id(model_name, record.id)
             if self._flag_stop_generating_xml_record(external_id, recursive_depth):
                 continue
             record_data = {"model_name": model_name, "xml_model": xml_model}
-            for field in field_map:
-                field_ttype = field_map[field].type
-                field_value = self._xml_data_generator_get_field_data(record, field, field_map[field], field_ttype)
+            for field_object in field_objects:
+                field_value = self._xml_data_generator_get_field_data(record, field_object)
+                field_ttype = field_object.type
+                field_name = field_object.name
+                # Update the data if field is not one2many field
                 if field_ttype != "one2many":
                     record_data.update(field_value)
+                # Begin fetching data for child recordsets
                 if field_ttype not in ["one2many", "many2one", "many2many"] or not field_value:
                     continue
-                related_recordset = field_value[field].pop("value")
+                related_recordset = field_value[field_name].pop("value")
                 child_external_ids = []
                 for related_record in related_recordset:
                     child_model = related_record._name
                     child_external_id = self._prepare_external_id(child_model, related_record.id)
                     child_external_ids.append(child_external_id)
-                    # Do not add one2many records to dependencies (only many2one and many2many)
-                    if field_ttype != "one2many":
-                        # If parent is not in its child's dependencies, add child to dependencies
-                        # this check is used to avoid circular dependencies.
-                        # Same goes for model dependencies.
-                        # if external_id not in dependency_tree.get(child_external_id, set()):
+                    # If field is one2many, invert dependency order
+                    if field_ttype == "one2many":
+                        dependency_tree.setdefault(child_external_id, set()).add(external_id)
+                        dependency_data["model_dependencies"].setdefault(model_name, set()).add(child_model)
+                    else:
                         dependency_tree.setdefault(external_id, set()).add(child_external_id)
-                        # if model_name not in dependency_data["model_dependencies"].get(child_model, set()):
                         dependency_data["model_dependencies"].setdefault(child_model, set()).add(model_name)
                     # If next layer does not exceed set recursive depth, execute call on next layer
                     if recursive_depth + 1 <= int(self.recursive_depth):
@@ -245,7 +250,7 @@ class XmlDataGenerator(models.TransientModel):
                             recursive_depth + 1,
                         )
                 # Replace the records themselves by their external_ids
-                field_value[field]["value"] = child_external_ids
+                field_value[field_name]["value"] = child_external_ids
             data.setdefault(model_name, {}).update({external_id: record_data})
             dependency_data["record_dependencies"].update({external_id: dependency_tree.get(external_id, {})})
         return data, dependency_data
@@ -253,21 +258,21 @@ class XmlDataGenerator(models.TransientModel):
     def _prepare_primary_typed_row(self, field_value, row_dict, field_ttype):
         row_dict["field_value"] = field_value
         if field_ttype == "boolean":
-            return '%(t)s%(t)s<field name="%(field)s" eval="%(field_value)s" />' % row_dict
-        return '%(t)s%(t)s<field name="%(field)s">%(field_value)s</field>' % row_dict
+            return '%(t)s%(t)s&lt;field name="%(field)s" eval="%(field_value)s" /&gt;' % row_dict
+        return '%(t)s%(t)s&lt;field name="%(field)s"&gt;%(field_value)s&lt;/field&gt;' % row_dict
 
     def _prepare_many2one_row(self, xid_map, row_dict):
         record_xid = xid_map[0] if xid_map else None
         if not record_xid:
             return None
         row_dict["ref_value"] = record_xid
-        row = '%(t)s%(t)s<field name="%(field)s" ref="%(ref_value)s" />' % row_dict
-        if len(row) > MAX_ROW_LENGTH:
+        row = '%(t)s%(t)s&lt;field name="%(field)s" ref="%(ref_value)s" /&gt;' % row_dict
+        if len(html_to_text(row)) > MAX_ROW_LENGTH:
             row = (
-                "%(t)s%(t)s<field\n"
-                '%(t)s%(t)s%(t)sname="%(field)s"\n'
-                '%(t)s%(t)s%(t)sref="%(ref_value)s"\n'
-                "%(t)s%(t)s/>"
+                "%(t)s%(t)s&lt;field<br/>"
+                '%(t)s%(t)s%(t)sname="%(field)s"<br/>'
+                '%(t)s%(t)s%(t)sref="%(ref_value)s"<br/>'
+                "%(t)s%(t)s/&gt;"
             ) % row_dict
         return row
 
@@ -278,21 +283,21 @@ class XmlDataGenerator(models.TransientModel):
         if not external_ids:
             return None
         row_dict["eval_value"] = "[Command.set([%s])]" % ", ".join(external_ids)
-        row = '%(t)s%(t)s<field name="%(field)s" eval="%(eval_value)s" />' % row_dict
-        if len(row) > MAX_ROW_LENGTH:
-            row_dict["external_ids"] = ",\n%(t)s%(t)s%(t)s%(t)s".join(external_ids) % row_dict
+        row = '%(t)s%(t)s&lt;field name="%(field)s" eval="%(eval_value)s" /&gt;' % row_dict
+        if len(html_to_text(row)) > MAX_ROW_LENGTH:
+            row_dict["external_ids"] = ",<br/>%(t)s%(t)s%(t)s%(t)s".join(external_ids) % row_dict
             row_dict["eval_value"] = (
-                "[Command.set([\n%(t)s%(t)s%(t)s%(t)s%(external_ids)s,\n%(t)s%(t)s%(t)s])]" % row_dict
+                "[Command.set([<br/>%(t)s%(t)s%(t)s%(t)s%(external_ids)s,<br/>%(t)s%(t)s%(t)s])]" % row_dict
             )
             row = (
-                '%(t)s%(t)s<field\n%(t)s%(t)s%(t)sname="%(field)s"'
-                '\n%(t)s%(t)s%(t)seval="%(eval_value)s"'
-                "\n%(t)s%(t)s/>" % row_dict
+                '%(t)s%(t)s&lt;field<br/>%(t)s%(t)s%(t)sname="%(field)s"'
+                '<br/>%(t)s%(t)s%(t)seval="%(eval_value)s"'
+                "<br/>%(t)s%(t)s/&gt;" % row_dict
             )
         return row
 
     def _prepare_xml_row_to_append(self, field_name, field_value, field_ttype):
-        row_dict = {"t": "    ", "field": field_name}
+        row_dict = {"t": "&nbsp;&nbsp;&nbsp;&nbsp;", "field": field_name}
         if field_ttype not in ["many2many", "many2one", "one2many"]:
             return self._prepare_primary_typed_row(field_value, row_dict, field_ttype)
         if field_ttype == "many2one":
@@ -310,14 +315,22 @@ class XmlDataGenerator(models.TransientModel):
             for external_id in sorted_xml_dependencies
             if external_id in unsorted_data
         }
+        target_external_id = self._prepare_external_id(self.model_name, self.res_id)
         for external_id, dataset in sorted_data.items():
+            container_tag = "<div>"
+            if external_id == target_external_id:
+                container_tag = "<div style='font-weight: bold; padding: 15px; background-color: rgb(238, 238, 255);'>"
             xml_code = []
             model_name = dataset.pop("model_name")
             dataset.pop("xml_model")
-            xml_code.append('    <record id="%s" model="%s">' % (external_id, model_name))
+            xml_code.append(
+                '%s&nbsp;&nbsp;&nbsp;&nbsp;&lt;record id="%s" model="%s"&gt;'
+                % (container_tag, external_id, model_name)
+            )
             for field_name, field_data in dataset.items():
                 # Do not add fields for models with "downstream" dependencies, only upwards
                 # to avoid defining a field relationship twice (which would result in a dependency error)
+                # when installing XML data
                 field_related_model = field_data["related_model"]
                 if field_related_model and sorted_model_dependencies_dict.get(
                     field_related_model, -1
@@ -326,14 +339,19 @@ class XmlDataGenerator(models.TransientModel):
                 row2append = self._prepare_xml_row_to_append(field_name, field_data["value"], field_data["ttype"])
                 if row2append:
                     xml_code.append(row2append)
-            xml_code.append("    </record>")
-            xml_records_code.append("\n".join(xml_code))
-        return '<?xml version="1.0" ?>\n<odoo>\n%s\n</odoo>\n' % "\n\n".join(xml_records_code)
+            xml_code.append("&nbsp;&nbsp;&nbsp;&nbsp;&lt;/record&gt;</div>")
+            record_xml = "<br/>".join(xml_code)
+            xml_records_code.append(record_xml)
+        return "%s%s%s" % (
+            '&lt;?xml version="1.0" ?&gt;<br/>&lt;odoo&gt;<br/>',
+            "<br/>".join(xml_records_code),
+            "&lt;/odoo&gt;",
+        )
 
     def _get_rebuilt_action(self, file_strings):
         files_list = [file_strings[model] for model in file_strings]
         files_list.reverse()
-        data2show = "\n".join(files_list)
+        data2show = "<br/><br/>".join(files_list)
         self.fetched_data = data2show
         return {
             "name": "Export to XML",
