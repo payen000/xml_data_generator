@@ -11,7 +11,10 @@
         "security/ir.model.access.csv",
         "wizard/xml_data_generator_views.xml",
     ],
-    "demo": [],
+    "demo": [
+        "demo/res_partner.xml",
+        "demo/res_currency.xml",
+    ],
     "assets": {
         "web.assets_backend": [
             "xml_data_generator/static/src/views/form_controller.js",
