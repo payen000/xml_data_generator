@@ -4,7 +4,7 @@
         <field name="name">XML Data Generator Company</field>
         <field name="parent_id" ref="base.res_partner_12" />
         <field name="lang">en_US</field>
-         <field
+        <field
             name="category_id"
             eval="[(6, 0, [
                 ref('base.res_partner_category_8'),

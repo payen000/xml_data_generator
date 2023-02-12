@@ -104,6 +104,8 @@ class XmlDataGenerator(models.TransientModel):
         model = res.get("model_name", self._context.get("active_model", ""))
         res_id = res.get("res_id", self._context.get("active_id"))
         res["xml_data_generator_external_id"] = self._prepare_external_id(model, res_id)
+        res["model_name"] = model
+        res["res_id"] = res_id
         return res
 
     @api.model
@@ -344,8 +346,7 @@ class XmlDataGenerator(models.TransientModel):
     def _get_rebuilt_action(self, file_strings):
         files_list = [file_strings[model] for model in file_strings]
         files_list.reverse()
-        data2show = "<br/>".join(files_list)
-        self.fetched_data = data2show
+        self.fetched_data = "<br/>".join(files_list) + "<br/>"
         return {
             "name": "Export to XML",
             "type": "ir.actions.act_window",
