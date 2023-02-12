@@ -15,7 +15,7 @@
                         A record's External ID, in case it does not already exist, will be computed as follows:<br />
                         <br /> External ID = __xml_data_generator_virtual__.<span
                             style="font-weight: bold;"
-                        >model_name</span>_<span style="font-weight: bold;">id</span><br /><br />
+                        >model_name</span>_auto_<span style="font-weight: bold;">id</span><br /><br />
                         where
                     </p>
                     <ul class="oe_grey">
@@ -59,8 +59,9 @@
                         <field name="recursive_depth" />
                         <field name="avoid_duplicates" />
                         <field name="ignore_access" />
-                        <field name="fetched_data" attrs="{'invisible': [('fetched_data', '=', False)]}" />
                     </group>
+                    <separator string="Results" attrs="{'invisible': [('fetched_data', '=', False)]}" />
+                    <field name="fetched_data" attrs="{'invisible': [('fetched_data', '=', False)]}" nolabel="1" />
                     <footer>
                         <button
                             string="Export to XML"

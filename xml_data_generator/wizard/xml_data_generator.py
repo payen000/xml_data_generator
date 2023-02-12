@@ -307,15 +307,8 @@ class XmlDataGenerator(models.TransientModel):
         # Do not add one2many rows (they will be handled in the "many" side of the relation)
         return None
 
-    def prepare_xml_data_to_export(self, unsorted_data, sorted_xml_dependencies, sorted_model_dependencies_dict):
+    def prepare_xml_data_to_export(self, target_external_id, sorted_data, sorted_model_dependencies_dict):
         xml_records_code = []
-        # Sort the data by external ID dependency order
-        sorted_data = {
-            external_id: unsorted_data[external_id]
-            for external_id in sorted_xml_dependencies
-            if external_id in unsorted_data
-        }
-        target_external_id = self._prepare_external_id(self.model_name, self.res_id)
         for external_id, dataset in sorted_data.items():
             container_tag = "<div>"
             if external_id == target_external_id:
@@ -343,15 +336,15 @@ class XmlDataGenerator(models.TransientModel):
             record_xml = "<br/>".join(xml_code)
             xml_records_code.append(record_xml)
         return "%s%s%s" % (
-            '&lt;?xml version="1.0" ?&gt;<br/>&lt;odoo&gt;<br/>',
+            '<div>&lt;?xml version="1.0" ?&gt;<br/>&lt;odoo&gt;',
             "<br/>".join(xml_records_code),
-            "&lt;/odoo&gt;",
+            "&lt;/odoo&gt;</div>",
         )
 
     def _get_rebuilt_action(self, file_strings):
         files_list = [file_strings[model] for model in file_strings]
         files_list.reverse()
-        data2show = "<br/><br/>".join(files_list)
+        data2show = "<br/>".join(files_list)
         self.fetched_data = data2show
         return {
             "name": "Export to XML",
@@ -367,9 +360,13 @@ class XmlDataGenerator(models.TransientModel):
         }
 
     def action_export_to_xml(self):
+        """Main method.
+
+        return: dict - an action for the same wizard that triggered the call but with fetched_data filled in.
+        """
         self.ensure_one()
-        records2export = self._get_record_to_export()
-        if not records2export and self.search_by_external_id:
+        target_record = self._get_record_to_export()
+        if not target_record and self.search_by_external_id:
             raise MissingError(
                 "\n".join(
                     [
@@ -379,7 +376,7 @@ class XmlDataGenerator(models.TransientModel):
                 )
             )
         data2export, dependency_data = self._prepare_data_to_export(
-            records2export,
+            target_record,
             {},
             {},
             {"record_dependencies": {}, "model_dependencies": {}},
@@ -395,12 +392,20 @@ class XmlDataGenerator(models.TransientModel):
         sorted_model_dependencies_dict = {model: i for i, model in enumerate(sorted_model_dependencies)}
 
         file_strings = {}
+        target_external_id = self._prepare_external_id(target_record._name, target_record.id)
         for model in sorted_model_dependencies:
             if model not in data2export:
                 continue
+            # Sort the data by external ID dependency order
+            unsorted_data = data2export[model]
+            sorted_data = {
+                external_id: unsorted_data[external_id]
+                for external_id in sorted_xml_dependencies
+                if external_id in unsorted_data
+            }
             xml_data_string = self.prepare_xml_data_to_export(
-                data2export[model],
-                sorted_xml_dependencies,
+                target_external_id,
+                sorted_data,
                 sorted_model_dependencies_dict,
             )
             file_strings.update({model: xml_data_string})
