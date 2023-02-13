@@ -2,7 +2,8 @@ import html
 import unicodedata
 from xml.etree import ElementTree as ET
 
-from odoo.tests import Form, TransactionCase, tagged
+from odoo.exceptions import AccessError
+from odoo.tests import Form, SavepointCase, tagged
 
 from odoo.addons.xml_data_generator.wizard.xml_data_generator import (
     RECURSIVE_DEPTH_STATES,
@@ -10,7 +11,7 @@ from odoo.addons.xml_data_generator.wizard.xml_data_generator import (
 
 
 @tagged("test_xml_data_generator")
-class TestXMLDataGenerator(TransactionCase):
+class TestXMLDataGenerator(SavepointCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -99,7 +100,47 @@ class TestXMLDataGenerator(TransactionCase):
         for field_node in field_nodes:
             self.check_node(xml_wizard, field_node, field_object_map, partner)
 
-    def test_03_export_partner_depth_1(self):
+    def test_03_export_partner_dummy_string_data(self):
+        """Export a partner to XML, but fetch demo data from model using defined methods for it, if any."""
+        partner = self.env.ref("xml_data_generator.res_partner_auto_3")
+        field_objects = self.xml_wizard._get_field_objects(partner._name)
+        field_object_map = {field_object.name: field_object for field_object in field_objects}
+        partner_context = {"active_model": partner._name, "active_id": partner.id}
+        xml_wizard_form = Form(self.xml_wizard.with_context(**partner_context))
+        xml_wizard_form.mode = "demo"
+        self.assertEqual(xml_wizard_form.res_id, partner.id)
+        xml_wizard = xml_wizard_form.save()
+        # Export XML for a single partner
+        xml_wizard.action_export_to_xml()
+        xml_tree = self.get_xml_trees(xml_wizard.fetched_data)[0]
+        parent_node = xml_tree.find(".//record")
+        # Ensure a record was found
+        self.assertTrue(bool(parent_node))
+        field_nodes = parent_node.findall("./field")
+        for field_node in field_nodes:
+            self.check_node(xml_wizard, field_node, field_object_map, partner)
+
+    def test_04_export_partner_company_dummy_string_data(self):
+        """Export a partner company to XML, but fetch demo data from model using defined methods for it, if any."""
+        partner = self.env.ref("xml_data_generator.res_partner_auto_1")
+        field_objects = self.xml_wizard._get_field_objects(partner._name)
+        field_object_map = {field_object.name: field_object for field_object in field_objects}
+        partner_context = {"active_model": partner._name, "active_id": partner.id}
+        xml_wizard_form = Form(self.xml_wizard.with_context(**partner_context))
+        xml_wizard_form.mode = "demo"
+        self.assertEqual(xml_wizard_form.res_id, partner.id)
+        xml_wizard = xml_wizard_form.save()
+        # Export XML for a single partner
+        xml_wizard.action_export_to_xml()
+        xml_tree = self.get_xml_trees(xml_wizard.fetched_data)[0]
+        parent_node = xml_tree.find(".//record")
+        # Ensure a record was found
+        self.assertTrue(bool(parent_node))
+        field_nodes = parent_node.findall("./field")
+        for field_node in field_nodes:
+            self.check_node(xml_wizard, field_node, field_object_map, partner)
+
+    def test_05_export_partner_depth_1(self):
         """Export a partner to XML, set recursive depth = 1 to trigger methods that compute dependencies.
         This test deals with many2many and many2one fields.
         """
@@ -117,12 +158,11 @@ class TestXMLDataGenerator(TransactionCase):
         parent_node = xml_tree.find(".//record")
         # Ensure a record was found
         self.assertTrue(bool(parent_node))
-
         field_nodes = parent_node.findall("./field")
         for field_node in field_nodes:
             self.check_node(xml_wizard, field_node, field_object_map, partner)
 
-    def test_04_export_currency_depth_2(self):
+    def test_06_export_currency_depth_2(self):
         """Export a currency to XML, set recursive depth = 2 to trigger methods that compute dependencies.
         This test deals with one2many fields.
         """
@@ -148,3 +188,39 @@ class TestXMLDataGenerator(TransactionCase):
             field_nodes = parent_node.findall("./field")
             for field_node in field_nodes:
                 self.check_node(xml_wizard, field_node, field_object_map, currency)
+
+    def test_07_export_user_raise_access_error(self):
+        """Export a user to XML, but raise AccessError with totp_secret field."""
+        user = self.env.ref("base.user_admin")
+        self.xml_wizard._get_field_objects(user._name)
+        user_context = {"active_model": user._name, "active_id": user.id}
+        xml_wizard_form = Form(self.xml_wizard.with_context(**user_context))
+        xml_wizard_form.recursive_depth = RECURSIVE_DEPTH_STATES[1][0]
+        self.assertEqual(xml_wizard_form.res_id, user.id)
+        xml_wizard = xml_wizard_form.save()
+        # Export XML for a single user
+        with self.assertRaises(AccessError):
+            xml_wizard.with_user(2).action_export_to_xml()
+
+    def test_08_export_user_not_raise_access_error(self):
+        """Export a user to XML, but do not raise AccessError with totp_secret field."""
+        user = self.env.ref("base.user_admin")
+        user.signature = False
+        field_objects = self.xml_wizard._get_field_objects(user._name)
+        field_object_map = {field_object.name: field_object for field_object in field_objects}
+        self.xml_wizard._get_field_objects(user._name)
+        user_context = {"active_model": user._name, "active_id": user.id}
+        xml_wizard_form = Form(self.xml_wizard.with_context(**user_context))
+        xml_wizard_form.recursive_depth = RECURSIVE_DEPTH_STATES[1][0]
+        xml_wizard_form.ignore_access = True
+        self.assertEqual(xml_wizard_form.res_id, user.id)
+        xml_wizard = xml_wizard_form.save()
+        # Export XML for a single user
+        xml_wizard.action_export_to_xml()
+        xml_tree = self.get_xml_trees(xml_wizard.fetched_data)[0]
+        parent_node = xml_tree.find(".//record")
+        # Ensure a record was found
+        self.assertTrue(bool(parent_node))
+        field_nodes = parent_node.findall("./field")
+        for field_node in field_nodes:
+            self.check_node(xml_wizard, field_node, field_object_map, user)
