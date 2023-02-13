@@ -127,6 +127,16 @@ class XmlDataGenerator(models.TransientModel):
             res_id = int(record_name[separator_position + separator_length :])
         return self.env[model_name].browse(res_id)
 
+    def _get_recordset_ids(self, ttype, value):
+        # Transform recordsets to their ids to allow comparisons between lists of IDs
+        # and recordsets; if not a recordset, return intact value
+        if ttype in ["many2many", "many2one", "one2many"] and isinstance(value, models.Model):
+            return value.ids
+        return value
+
+    def _is_equal_field(self, ttype, current_value, default_value):
+        return (not ttype == "boolean" and not current_value) or default_value == current_value
+
     def _xml_data_generator_get_field_data(self, record, field_object):
         """Get the field values for a given record.
 
@@ -170,7 +180,9 @@ class XmlDataGenerator(models.TransientModel):
             if hasattr(record, "_xml_data_generator_get_demo_%s" % field_name):
                 current_value = getattr(record, "_xml_data_generator_get_demo_%s" % field_name)()
         # Exclude non-boolean False fields and fields that have the same value as their defaults
-        if (not ttype == "boolean" and not current_value) or default_value == current_value:
+        if self._is_equal_field(
+            field_object, self._get_recordset_ids(ttype, current_value), self._get_recordset_ids(ttype, default_value)
+        ):
             return {}
         if ttype in TEXT_TTYPES and current_value:
             current_value = misc.html_escape(current_value)
