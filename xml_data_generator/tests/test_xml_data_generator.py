@@ -57,6 +57,7 @@ class TestXMLDataGenerator(TransactionCase):
             res.replace("<br>", "")
             .replace('<div><?xml version="1.0" ?>', '<?xml version="1.0" ?>')
             .replace("</div></odoo></div>", "</div></odoo>")
+            .replace("\xa0", " ")
         )
         res = res.split('<?xml version="1.0" ?>')[1:]
         return [ET.ElementTree(ET.fromstring('<?xml version="1.0" ?>%s' % record)) for record in res]
@@ -203,7 +204,7 @@ class TestXMLDataGenerator(TransactionCase):
         currency_context = {"active_model": currency._name, "active_id": currency.id}
         xml_wizard_form = Form(self.xml_wizard.with_context(**currency_context))
         xml_wizard_form.recursive_depth = RECURSIVE_DEPTH_STATES[2][0]
-        xml_wizard_form.avoid_duplicates = False
+        xml_wizard_form.show_xml_records = False
         self.assertEqual(xml_wizard_form.res_id, currency.id)
         xml_wizard = xml_wizard_form.save()
         # Export XML for a single currency
